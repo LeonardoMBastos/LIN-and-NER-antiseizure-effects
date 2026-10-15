@@ -546,15 +546,14 @@ make_residue_inset <- function(loadings_df) {
       size = 0.55,
       colour = "black"
     ) +
-    ggrepel::geom_label_repel(
+    ggrepel::geom_text_repel(
       aes(label = label),
       seed = 1234,
       size = 2.15,
       colour = "black",
       fontface = "italic",
-      fill = grDevices::adjustcolor("white", alpha.f = 0.92),
-      label.size = 0,
-      label.padding = grid::unit(0.08, "lines"),
+      bg.color = grDevices::adjustcolor("white", alpha.f = 0.92),
+      bg.r = 0.10,
       box.padding = 0.55,
       point.padding = 0.18,
       segment.colour = "grey55",
