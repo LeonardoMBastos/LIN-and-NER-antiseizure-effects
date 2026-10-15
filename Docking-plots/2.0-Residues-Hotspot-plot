@@ -1,0 +1,898 @@
+# ============================================================
+# TOP 10 RESIDUE HOTSPOTS BY BINDING SITE — LIN / NER — RSTUDIO
+# INDIVIDUAL FIGURES + COMBINED FIGURE
+# ============================================================
+
+# 1) PACKAGES -------------------------------------------------
+packages <- c(
+  "dplyr", "tidyr", "ggplot2", "readr", "readxl",
+  "writexl", "svglite", "patchwork"
+)
+missing <- packages[!vapply(packages, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing) > 0) install.packages(missing, dependencies = TRUE)
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readr)
+library(readxl)
+library(writexl)
+library(patchwork)
+
+# 2) CONFIGURATION --------------------------------------------
+TOP_N_HOTSPOTS <- 10
+AFFINITY_FOR_SIZE <- "mean"   # "mean" or "best"
+
+COMPOUND_ORDER <- c("DZP", "PHB", "GABA", "LIN", "NER")
+SITE_ORDER <- c("BZD", "Barbiturates", "GABA")
+
+COMPOUND_COLORS <- c(
+  DZP   = "#410257",
+  PHB   = "#8C7D37",
+  GABA  = "#C06000",
+  LIN   = "#92C59A",
+  NER   = "#386486"
+)
+
+OUTPUT_DIR <- file.path(getwd(), "Hotspot_results_LIN_NER")
+if (!dir.exists(OUTPUT_DIR)) dir.create(OUTPUT_DIR, recursive = TRUE)
+
+COMBINED_PNG_FILE <- file.path(OUTPUT_DIR, "Top10_hotspots_LIN_NER_by_binding_site_combined.png")
+COMBINED_PNG_TRANSPARENT_FILE <- file.path(OUTPUT_DIR, "Top10_hotspots_LIN_NER_by_binding_site_combined_transparent.png")
+COMBINED_SVG_FILE <- file.path(OUTPUT_DIR, "Top10_hotspots_LIN_NER_by_binding_site_combined.svg")
+EXCEL_OUTPUT <- file.path(OUTPUT_DIR, "Top10_hotspots_LIN_NER_summary.xlsx")
+
+SITE_FILE_TAGS <- c(
+  BZD = "BZD",
+  Barbiturates = "BB",
+  GABA = "GABA"
+)
+
+SITE_TITLES <- c(
+  BZD = "BZD site",
+  Barbiturates = "Barbiturate site",
+  GABA = "GABA site"
+)
+
+BUBBLE_MIN_DIAMETER <- 4
+BUBBLE_MAX_DIAMETER <- 14
+POSITIVE_MAX_DIAMETER_RATIO <- 2 / 5
+
+
+# 3) HELPER FUNCTIONS -----------------------------------------
+normalize_text <- function(x) {
+  x <- as.character(x)
+  x[is.na(x)] <- ""
+  gsub("[^a-z0-9]", "", trimws(tolower(x)))
+}
+
+context_tokens <- function(x) {
+  z <- unlist(strsplit(tolower(as.character(x)), "[^a-z0-9]+"))
+  z[z != ""]
+}
+
+to_numeric <- function(x) {
+  x <- trimws(as.character(x))
+  x <- gsub(",", ".", x, fixed = TRUE)
+  suppressWarnings(as.numeric(x))
+}
+
+is_missing_value <- function(x) {
+  if (is.null(x) || length(x) == 0) return(TRUE)
+  x <- x[1]
+  if (is.na(x)) return(TRUE)
+  trimws(as.character(x)) == ""
+}
+
+identify_basic_columns <- function(columns) {
+  n <- normalize_text(columns)
+  out <- list()
+  
+  for (alias in c("poseid", "pose")) {
+    idx <- which(n == alias)
+    if (length(idx) > 0) {
+      out$pose_ID <- columns[idx[1]]
+      break
+    }
+  }
+  
+  for (alias in c("affinity", "afinidade", "bindingaffinity", "dockingaffinity")) {
+    idx <- which(n == alias)
+    if (length(idx) > 0) {
+      out$affinity <- columns[idx[1]]
+      break
+    }
+  }
+  
+  out
+}
+
+identify_metadata_columns <- function(columns) {
+  n <- normalize_text(columns)
+  out <- list()
+  
+  for (alias in c("compound", "composto", "ligand", "ligante", "molecule", "molecula")) {
+    idx <- which(n == alias)
+    if (length(idx) > 0) {
+      out$compound <- columns[idx[1]]
+      break
+    }
+  }
+  
+  for (alias in c("site", "bindingsite", "bindingpocket", "pocket", "sitio", "sitiodeligacao")) {
+    idx <- which(n == alias)
+    if (length(idx) > 0) {
+      out$site <- columns[idx[1]]
+      break
+    }
+  }
+  
+  out
+}
+
+identify_residue_columns <- function(columns) {
+  n <- normalize_text(columns)
+  out <- list()
+  k <- 1L
+  
+  for (i in seq_along(columns)) {
+    m <- regexec("^residue([0-9]+)$", n[i])
+    p <- regmatches(n[i], m)[[1]]
+    if (length(p) != 2) next
+    
+    index <- p[2]
+    contact_idx <- which(n == paste0("contacts", index))
+    if (length(contact_idx) == 0) next
+    
+    out[[k]] <- list(
+      index = as.integer(index),
+      residue = columns[i],
+      contacts = columns[contact_idx[1]]
+    )
+    k <- k + 1L
+  }
+  
+  if (length(out) == 0) return(list())
+  out[order(vapply(out, function(x) x$index, numeric(1)))]
+}
+
+standardize_compound <- function(value) {
+  if (is_missing_value(value)) return(NULL)
+  n <- normalize_text(value)
+  
+  if (n == "dzp" || grepl("diazepam", n)) return("DZP")
+  if (n == "phb" || grepl("phenobarbital|phenobarbitone", n)) return("PHB")
+  if (n == "gaba" || grepl("gammaaminobutyricacid", n)) return("GABA")
+  if (n == "lin" || grepl("linalool|linalol", n)) return("LIN")
+  if (n == "ner" || grepl("nerolidol", n)) return("NER")
+  
+  NULL
+}
+
+standardize_site <- function(value) {
+  if (is_missing_value(value)) return(NULL)
+  n <- normalize_text(value)
+  
+  if (n == "bzd" || grepl("benzodiazep", n)) return("BZD")
+  if (n == "bb" || grepl("barbiturat", n)) return("Barbiturates")
+  if (n == "gaba" || grepl("orthoster|gabasite|sitegaba", n)) return("GABA")
+  
+  NULL
+}
+
+infer_compound_from_context <- function(text) {
+  tokens <- context_tokens(text)
+  compact <- normalize_text(text)
+  matches <- character(0)
+  
+  if ("dzp" %in% tokens || "diazepam" %in% tokens) matches <- c(matches, "DZP")
+  if ("phb" %in% tokens || "phenobarbital" %in% tokens || "phenobarbitone" %in% tokens) matches <- c(matches, "PHB")
+  if ("lin" %in% tokens || "linalool" %in% tokens || "linalol" %in% tokens || grepl("linalool|linalol", compact)) matches <- c(matches, "LIN")
+  if ("ner" %in% tokens || "nerolidol" %in% tokens || grepl("nerolidol", compact)) matches <- c(matches, "NER")
+  
+  if ("gaba" %in% tokens && !any(tokens %in% c("site", "orthosteric", "orthosterico"))) {
+    matches <- c(matches, "GABA")
+  }
+  
+  matches <- unique(matches)
+  if (length(matches) == 1L) return(matches)
+  NULL
+}
+
+infer_site_from_context <- function(text, inferred_compound = NULL) {
+  tokens <- context_tokens(text)
+  compact <- normalize_text(text)
+  
+  if ("bzd" %in% tokens || grepl("benzodiazep", compact)) return("BZD")
+  if ("bb" %in% tokens || grepl("barbiturat", compact)) return("Barbiturates")
+  if (any(tokens %in% c("orthosteric", "orthosterico")) || grepl("gabasite|sitegaba", compact)) return("GABA")
+  
+  gaba_count <- sum(tokens == "gaba")
+  if (gaba_count >= 2) return("GABA")
+  if (gaba_count >= 1 && !identical(inferred_compound, "GABA")) return("GABA")
+  
+  NULL
+}
+
+ask_choice <- function(question, options) {
+  cat("\n", question, "\n", sep = "")
+  for (i in seq_along(options)) cat(sprintf("  %d. %s\n", i, options[i]))
+  
+  repeat {
+    ans <- suppressWarnings(as.integer(readline("Enter the number: ")))
+    if (!is.na(ans) && ans >= 1 && ans <= length(options)) return(options[ans])
+    message("Invalid option. Please try again.")
+  }
+}
+
+count_fixed <- function(lines, pattern) {
+  sum(vapply(lines, function(x) {
+    hits <- gregexpr(pattern, x, fixed = TRUE)[[1]]
+    if (length(hits) == 1 && hits[1] == -1) 0L else length(hits)
+  }, integer(1)))
+}
+
+detect_delimiter <- function(file) {
+  lines <- readLines(file, n = 5, warn = FALSE)
+  counts <- c(
+    comma = count_fixed(lines, ","),
+    semicolon = count_fixed(lines, ";"),
+    tab = count_fixed(lines, "\t")
+  )
+  
+  switch(
+    names(counts)[which.max(counts)],
+    comma = ",",
+    semicolon = ";",
+    tab = "\t",
+    ","
+  )
+}
+
+read_source_tables <- function(file) {
+  ext <- tolower(tools::file_ext(file))
+  
+  if (ext == "csv") {
+    dat <- readr::read_delim(
+      file,
+      delim = detect_delimiter(file),
+      show_col_types = FALSE,
+      progress = FALSE,
+      trim_ws = TRUE,
+      name_repair = "minimal"
+    )
+    return(list(CSV = dat))
+  }
+  
+  if (ext %in% c("xlsx", "xls")) {
+    sheets <- readxl::excel_sheets(file)
+    out <- vector("list", length(sheets))
+    names(out) <- sheets
+    
+    for (i in seq_along(sheets)) {
+      out[[i]] <- readxl::read_excel(
+        file,
+        sheet = sheets[i],
+        .name_repair = "minimal"
+      )
+    }
+    return(out)
+  }
+  
+  stop("Unsupported file type: ", ext)
+}
+
+map_affinity_to_diameter <- function(affinity_values, reference_values, min_diameter = BUBBLE_MIN_DIAMETER, max_diameter = BUBBLE_MAX_DIAMETER, positive_max_ratio = POSITIVE_MAX_DIAMETER_RATIO) {
+  positive_cap <- max_diameter * positive_max_ratio
+  out <- rep(NA_real_, length(affinity_values))
+  
+  reference_values <- reference_values[is.finite(reference_values)]
+  if (length(reference_values) == 0) return(out)
+  
+  non_positive_reference <- reference_values[reference_values <= 0]
+  positive_reference <- reference_values[reference_values > 0]
+  
+  has_non_positive <- length(non_positive_reference) > 0
+  has_positive <- length(positive_reference) > 0
+  
+  best_negative <- if (has_non_positive) min(non_positive_reference, na.rm = TRUE) else NA_real_
+  worst_positive <- if (has_positive) max(positive_reference, na.rm = TRUE) else NA_real_
+  
+  for (i in seq_along(affinity_values)) {
+    value <- affinity_values[i]
+    if (!is.finite(value)) next
+    
+    if (value > 0) {
+      if (!has_positive || !is.finite(worst_positive) || worst_positive <= 0) {
+        out[i] <- positive_cap
+      } else if (isTRUE(all.equal(worst_positive, 0))) {
+        out[i] <- positive_cap
+      } else {
+        proportion <- value / worst_positive
+        proportion <- max(0, min(1, proportion))
+        out[i] <- positive_cap - proportion * (positive_cap - min_diameter)
+      }
+    } else {
+      if (!has_non_positive || !is.finite(best_negative)) {
+        out[i] <- positive_cap
+      } else if (isTRUE(all.equal(best_negative, 0))) {
+        out[i] <- positive_cap
+      } else {
+        proportion <- value / best_negative
+        proportion <- max(0, min(1, proportion))
+        out[i] <- positive_cap + proportion * (max_diameter - positive_cap)
+      }
+    }
+  }
+  
+  out
+}
+
+# 4) SELECT SOURCE FILES --------------------------------------
+candidate_files <- list.files(
+  getwd(),
+  pattern = "\\.(csv|xlsx|xls)$",
+  full.names = TRUE,
+  ignore.case = TRUE
+)
+
+candidate_files <- candidate_files[basename(candidate_files) != basename(EXCEL_OUTPUT)]
+candidate_files <- sort(unique(candidate_files))
+
+cat("\n============================================================\n")
+cat("AVAILABLE DATA SOURCES\n")
+cat("============================================================\n")
+
+if (length(candidate_files) > 0) {
+  for (i in seq_along(candidate_files)) {
+    cat(sprintf("%d. %s\n", i, basename(candidate_files[i])))
+  }
+}
+
+cat("\nALL = all listed files\n")
+cat("1 or 1,2,4 = selected listed files\n")
+cat("BROWSE = select file(s) manually\n")
+
+repeat {
+  selection <- trimws(readline("\nWhich source(s) should be used? "))
+  selection_upper <- toupper(selection)
+  
+  if (selection_upper == "ALL" && length(candidate_files) > 0) {
+    selected_files <- candidate_files
+    break
+  }
+  
+  if (selection_upper == "BROWSE" || length(candidate_files) == 0) {
+    if (.Platform$OS.type == "windows") {
+      selected_files <- utils::choose.files(
+        caption = "Select CSV / XLSX / XLS source files",
+        multi = TRUE
+      )
+    } else {
+      selected_files <- file.choose()
+    }
+    
+    selected_files <- selected_files[
+      grepl("\\.(csv|xlsx|xls)$", selected_files, ignore.case = TRUE)
+    ]
+    
+    if (length(selected_files) > 0) break
+    message("No valid CSV/XLSX/XLS file selected.")
+    next
+  }
+  
+  indices <- suppressWarnings(as.integer(trimws(strsplit(selection, ",", fixed = TRUE)[[1]])))
+  
+  if (
+    length(indices) > 0 &&
+    all(!is.na(indices)) &&
+    all(indices >= 1) &&
+    all(indices <= length(candidate_files))
+  ) {
+    selected_files <- candidate_files[indices]
+    break
+  }
+  
+  message("Invalid selection. Please try again.")
+}
+
+cat("\nSelected sources:\n")
+for (f in selected_files) cat(" - ", basename(f), "\n", sep = "")
+
+# 5) METADATA RESOLUTION -------------------------------------
+compound_cache <- new.env(parent = emptyenv())
+site_cache <- new.env(parent = emptyenv())
+
+resolve_compound <- function(raw_value, default_value, context) {
+  detected <- standardize_compound(raw_value)
+  if (!is.null(detected)) return(detected)
+  if (is_missing_value(raw_value) && !is.null(default_value)) return(default_value)
+  
+  if (!is_missing_value(raw_value) && normalize_text(raw_value) %in% c("ger", "geraniol", "gerac", "geranylacetate")) {
+    stop("The input contains GER/GERAC labels. Use a LIN/NER dataset or correct the compound labels in the source file: ", context)
+  }
+  
+  raw_string <- if (is_missing_value(raw_value)) "<missing>" else as.character(raw_value)
+  key <- paste(context, raw_string, sep = "||")
+  
+  if (!exists(key, envir = compound_cache, inherits = FALSE)) {
+    cat("\nCould not identify COMPOUND automatically.\n")
+    cat("Source: ", context, "\n", sep = "")
+    if (!is_missing_value(raw_value)) cat("Observed value: ", raw_value, "\n", sep = "")
+    
+    selected <- ask_choice("Which compound does this dataset represent?", COMPOUND_ORDER)
+    assign(key, selected, envir = compound_cache)
+  }
+  
+  get(key, envir = compound_cache, inherits = FALSE)
+}
+
+resolve_site <- function(raw_value, default_value, context) {
+  detected <- standardize_site(raw_value)
+  if (!is.null(detected)) return(detected)
+  if (is_missing_value(raw_value) && !is.null(default_value)) return(default_value)
+  
+  raw_string <- if (is_missing_value(raw_value)) "<missing>" else as.character(raw_value)
+  key <- paste(context, raw_string, sep = "||")
+  
+  if (!exists(key, envir = site_cache, inherits = FALSE)) {
+    cat("\nCould not identify BINDING SITE automatically.\n")
+    cat("Source: ", context, "\n", sep = "")
+    if (!is_missing_value(raw_value)) cat("Observed value: ", raw_value, "\n", sep = "")
+    
+    selected <- ask_choice("Which binding site does this dataset represent?", SITE_ORDER)
+    assign(key, selected, envir = site_cache)
+  }
+  
+  get(key, envir = site_cache, inherits = FALSE)
+}
+
+# 6) EXTRACT ALL DATA ----------------------------------------
+interaction_records <- list()
+pose_records <- list()
+interaction_counter <- 1L
+pose_counter <- 1L
+valid_tables <- 0L
+
+for (file in selected_files) {
+  filename <- basename(file)
+  tables <- read_source_tables(file)
+  
+  for (sheet_name in names(tables)) {
+    df <- as.data.frame(tables[[sheet_name]], stringsAsFactors = FALSE)
+    if (nrow(df) == 0) next
+    
+    names(df) <- trimws(names(df))
+    
+    basic <- identify_basic_columns(names(df))
+    residue_columns <- identify_residue_columns(names(df))
+    
+    if (is.null(basic$pose_ID) || is.null(basic$affinity) || length(residue_columns) == 0) next
+    
+    valid_tables <- valid_tables + 1L
+    metadata <- identify_metadata_columns(names(df))
+    
+    POSE_COLUMN <- basic$pose_ID
+    AFFINITY_COLUMN <- basic$affinity
+    COMPOUND_COLUMN <- metadata$compound
+    SITE_COLUMN <- metadata$site
+    
+    context <- paste(filename, sheet_name, sep = " | ")
+    default_compound <- infer_compound_from_context(context)
+    default_site <- infer_site_from_context(context, default_compound)
+    
+    cat("\nReading: ", context, "\n", sep = "")
+    cat("  Compound inferred: ", if (is.null(default_compound)) "not identified" else default_compound, "\n", sep = "")
+    cat("  Site inferred: ", if (is.null(default_site)) "not identified" else default_site, "\n", sep = "")
+    
+    for (row_index in seq_len(nrow(df))) {
+      pose_id <- trimws(as.character(df[[POSE_COLUMN]][row_index]))
+      affinity <- to_numeric(df[[AFFINITY_COLUMN]][row_index])
+      
+      if (is.na(affinity) || is.na(pose_id) || pose_id == "") next
+      
+      row_context <- paste(context, pose_id, sep = " | ")
+      row_default_compound <- infer_compound_from_context(pose_id)
+      if (is.null(row_default_compound)) row_default_compound <- default_compound
+      
+      raw_compound <- if (!is.null(COMPOUND_COLUMN)) df[[COMPOUND_COLUMN]][row_index] else NA_character_
+      compound <- resolve_compound(raw_compound, row_default_compound, context)
+      
+      row_default_site <- infer_site_from_context(row_context, compound)
+      if (is.null(row_default_site)) row_default_site <- default_site
+      
+      raw_site <- if (!is.null(SITE_COLUMN)) df[[SITE_COLUMN]][row_index] else NA_character_
+      site <- resolve_site(raw_site, row_default_site, context)
+      source_ID <- paste(filename, sheet_name, sep = "::")
+      
+      pose_records[[pose_counter]] <- data.frame(
+        source_ID = source_ID,
+        site = site,
+        compound = compound,
+        pose_ID = pose_id,
+        affinity = affinity,
+        stringsAsFactors = FALSE
+      )
+      pose_counter <- pose_counter + 1L
+      
+      for (residue_pair in residue_columns) {
+        residue_col <- residue_pair$residue
+        contacts_col <- residue_pair$contacts
+        
+        residue <- df[[residue_col]][row_index]
+        contacts <- to_numeric(df[[contacts_col]][row_index])
+        
+        if (is_missing_value(residue)) next
+        if (is.na(contacts) || contacts <= 0) next
+        
+        interaction_records[[interaction_counter]] <- data.frame(
+          source_ID = source_ID,
+          site = site,
+          compound = compound,
+          pose_ID = pose_id,
+          affinity = affinity,
+          residue = trimws(as.character(residue)),
+          contacts = contacts,
+          stringsAsFactors = FALSE
+        )
+        interaction_counter <- interaction_counter + 1L
+      }
+    }
+  }
+}
+
+# 7) VALIDATE EXTRACTED DATA ---------------------------------
+if (valid_tables == 0) {
+  stop(
+    paste0(
+      "No valid DockAnalyzer table was found.\n",
+      "Required columns: pose_ID, affinity and residue_N / contacts_N pairs."
+    )
+  )
+}
+
+if (length(interaction_records) == 0) stop("No valid residue interactions were extracted.")
+
+long_df <- bind_rows(interaction_records)
+poses_df <- bind_rows(pose_records) %>%
+  distinct(source_ID, site, compound, pose_ID, .keep_all = TRUE)
+
+# 8) COLLAPSE DUPLICATE RESIDUES WITHIN EACH POSE ------------
+pose_residue_df <- long_df %>%
+  group_by(source_ID, site, compound, pose_ID, residue) %>%
+  summarise(
+    affinity = first(affinity),
+    contacts = sum(contacts, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(pose_key = paste(source_ID, site, compound, pose_ID, sep = "::"))
+
+poses_df <- poses_df %>%
+  mutate(pose_key = paste(source_ID, site, compound, pose_ID, sep = "::"))
+
+# 9) IDENTIFY AVAILABLE SITES --------------------------------
+available_sites <- unique(pose_residue_df$site)
+sites <- SITE_ORDER[SITE_ORDER %in% available_sites]
+if (length(sites) == 0) stop("No recognized binding sites were found.")
+
+cat("\n============================================================\n")
+cat("DATASETS DETECTED\n")
+cat("============================================================\n")
+
+for (site_i in sites) {
+  compounds_here <- COMPOUND_ORDER[
+    COMPOUND_ORDER %in% unique(pose_residue_df$compound[pose_residue_df$site == site_i])
+  ]
+  cat("\n", site_i, ": ", paste(compounds_here, collapse = ", "), "\n", sep = "")
+}
+
+# 10) CALCULATE TOP 10 FOR EACH SITE -------------------------
+site_results <- list()
+all_affinities_for_legend <- numeric(0)
+
+for (site_i in sites) {
+  site_df <- pose_residue_df %>% filter(site == site_i)
+  
+  compounds_here <- COMPOUND_ORDER[
+    COMPOUND_ORDER %in% unique(site_df$compound)
+  ]
+  
+  hotspot_ranking <- site_df %>%
+    group_by(residue) %>%
+    summarise(
+      interacting_poses = n_distinct(pose_key),
+      total_contacts = sum(contacts, na.rm = TRUE),
+      compounds_present = n_distinct(compound),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(interacting_poses), desc(total_contacts), residue) %>%
+    mutate(hotspot_rank = row_number())
+  
+  top_hotspots <- hotspot_ranking %>% slice_head(n = TOP_N_HOTSPOTS)
+  hotspot_residues <- top_hotspots$residue
+  
+  summary_df <- site_df %>%
+    filter(residue %in% hotspot_residues) %>%
+    group_by(compound, residue) %>%
+    summarise(
+      n_interacting_poses = n_distinct(pose_key),
+      mean_affinity = mean(affinity, na.rm = TRUE),
+      median_affinity = median(affinity, na.rm = TRUE),
+      best_affinity = min(affinity, na.rm = TRUE),
+      worst_affinity = max(affinity, na.rm = TRUE),
+      total_contacts = sum(contacts, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  full_grid <- expand_grid(
+    compound = compounds_here,
+    residue = hotspot_residues
+  )
+  
+  summary_df <- full_grid %>%
+    left_join(summary_df, by = c("compound", "residue")) %>%
+    left_join(top_hotspots %>% select(residue, hotspot_rank), by = "residue")
+  
+  total_pose_df <- poses_df %>%
+    filter(site == site_i) %>%
+    group_by(compound) %>%
+    summarise(total_compound_poses = n_distinct(pose_key), .groups = "drop")
+  
+  summary_df <- summary_df %>%
+    left_join(total_pose_df, by = "compound") %>%
+    mutate(
+      n_interacting_poses = replace_na(n_interacting_poses, 0L),
+      total_contacts = replace_na(total_contacts, 0),
+      interaction_frequency_percent = 100 * n_interacting_poses / total_compound_poses
+    )
+  
+  if (tolower(AFFINITY_FOR_SIZE) == "mean") {
+    summary_df <- summary_df %>% mutate(affinity_for_size = mean_affinity)
+    affinity_legend_title <- "Mean affinity\n(kcal/mol)"
+  } else if (tolower(AFFINITY_FOR_SIZE) == "best") {
+    summary_df <- summary_df %>% mutate(affinity_for_size = best_affinity)
+    affinity_legend_title <- "Best affinity\n(kcal/mol)"
+  } else {
+    stop('AFFINITY_FOR_SIZE must be "mean" or "best".')
+  }
+  
+  summary_df <- summary_df %>%
+    mutate(
+      site = site_i,
+      compound = factor(compound, levels = compounds_here),
+      residue = factor(residue, levels = rev(hotspot_residues))
+    ) %>%
+    arrange(hotspot_rank, compound)
+  
+  all_affinities_for_legend <- c(all_affinities_for_legend, summary_df$affinity_for_size)
+  
+  site_results[[site_i]] <- list(
+    summary = summary_df,
+    ranking = hotspot_ranking,
+    top_hotspots = top_hotspots,
+    residues = hotspot_residues,
+    compounds = compounds_here
+  )
+}
+
+# Site-specific bubble legends will be computed inside each plot.
+
+# 11) PLOT FUNCTION ------------------------------------------
+make_site_plot <- function(site_i) {
+  df <- site_results[[site_i]]$summary %>%
+    mutate(
+      favorability = -affinity_for_size,
+      compound = factor(as.character(compound), levels = site_results[[site_i]]$compounds),
+      residue = factor(as.character(residue), levels = rev(site_results[[site_i]]$residues))
+    )
+  
+  compounds_here <- site_results[[site_i]]$compounds
+  
+  site_affinity_values <- df$affinity_for_size
+  site_affinity_values <- site_affinity_values[!is.na(site_affinity_values) & is.finite(site_affinity_values)]
+  
+  if (length(site_affinity_values) == 0) {
+    stop(paste0("No valid affinity values are available for plotting in site: ", site_i))
+  }
+  
+  site_best_affinity <- min(site_affinity_values, na.rm = TRUE)      # most negative
+  site_least_affinity <- max(site_affinity_values, na.rm = TRUE)     # most positive
+  site_median_affinity <- median(site_affinity_values, na.rm = TRUE)
+  
+  site_legend_affinities <- c(site_least_affinity, site_median_affinity, site_best_affinity)
+  site_legend_labels <- sprintf("%.2f", site_legend_affinities)
+  
+  df <- df %>%
+    mutate(
+      bubble_diameter = map_affinity_to_diameter(
+        affinity_values = affinity_for_size,
+        reference_values = site_affinity_values
+      )
+    )
+  
+  site_legend_diameters <- map_affinity_to_diameter(
+    affinity_values = site_legend_affinities,
+    reference_values = site_affinity_values
+  )
+  
+  ggplot(df, aes(x = compound, y = residue)) +
+    geom_point(
+      aes(size = bubble_diameter, fill = compound),
+      shape = 21,
+      colour = "black",
+      stroke = 0.45,
+      alpha = 0.92,
+      na.rm = TRUE
+    ) +
+    scale_fill_manual(
+      values = COMPOUND_COLORS[compounds_here],
+      breaks = compounds_here,
+      drop = FALSE,
+      name = "Compounds"
+    ) +
+    scale_size_identity(
+      breaks = site_legend_diameters,
+      labels = site_legend_labels,
+      name = affinity_legend_title,
+      guide = "legend"
+    ) +
+    scale_x_discrete(drop = FALSE) +
+    scale_y_discrete(drop = FALSE) +
+    labs(
+      title = SITE_TITLES[[site_i]],
+      x = NULL,
+      y = "Residue hotspot"
+    ) +
+    guides(
+      fill = guide_legend(override.aes = list(size = 5), order = 1),
+      size = guide_legend(order = 2)
+    ) +
+    theme_classic(base_size = 14) +
+    theme(
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5, margin = margin(b = 16)),
+      axis.title.x = element_blank(),
+      axis.title.y = element_text(size = 16, face = "plain", margin = margin(r = 15)),
+      axis.text.x = element_text(
+        family = "Arial",
+        size = 13.5,
+        face = "plain",
+        angle = 0,
+        hjust = 0.5,
+        color = "black",
+        margin = margin(t = 5)
+      ),
+      axis.text.y = element_text(size = 13, face = "plain", color = "black"),
+      axis.ticks = element_blank(),
+      panel.grid.major.y = element_line(linewidth = 0.35, colour = "grey88"),
+      panel.grid.major.x = element_line(linewidth = 0.25, colour = "grey93"),
+      panel.grid.minor = element_blank(),
+      legend.position = "right",
+      legend.title = element_text(size = 12.5, face = "plain"),
+      legend.text = element_text(size = 11.5, face = "plain"),
+      legend.box = "vertical",
+      plot.margin = margin(20, 20, 20, 20)
+    )
+}
+
+# 12) GENERATE INDIVIDUAL PLOTS ------------------------------
+plot_list <- list()
+for (site_i in sites) {
+  p_site <- make_site_plot(site_i)
+  plot_list[[site_i]] <- p_site
+  print(p_site)
+  
+  site_tag <- SITE_FILE_TAGS[[site_i]]
+  png_file <- file.path(OUTPUT_DIR, paste0("Top10_hotspots_LIN_NER_", site_tag, ".png"))
+  png_transparent_file <- file.path(OUTPUT_DIR, paste0("Top10_hotspots_LIN_NER_", site_tag, "_transparent.png"))
+  svg_file <- file.path(OUTPUT_DIR, paste0("Top10_hotspots_LIN_NER_", site_tag, ".svg"))
+  
+  ggsave(
+    png_file, p_site,
+    width = 8.2, height = 6.2, units = "in", dpi = 600, bg = "white"
+  )
+  
+  ggsave(
+    png_transparent_file, p_site,
+    width = 8.2, height = 6.2, units = "in", dpi = 600, bg = "transparent"
+  )
+  
+  ggsave(
+    svg_file, p_site,
+    width = 8.2, height = 6.2, units = "in",
+    device = svglite::svglite, bg = "transparent"
+  )
+}
+
+# 13) GENERATE COMBINED PLOT ---------------------------------
+combined_plot <- wrap_plots(plot_list, nrow = 1, guides = "keep")
+print(combined_plot)
+
+COMBINED_FIG_WIDTH <- max(18, 7.8 * length(plot_list))
+COMBINED_FIG_HEIGHT <- 6.5
+
+ggsave(
+  COMBINED_PNG_FILE, combined_plot,
+  width = COMBINED_FIG_WIDTH, height = COMBINED_FIG_HEIGHT,
+  units = "in", dpi = 600, bg = "white"
+)
+
+ggsave(
+  COMBINED_PNG_TRANSPARENT_FILE, combined_plot,
+  width = COMBINED_FIG_WIDTH, height = COMBINED_FIG_HEIGHT,
+  units = "in", dpi = 600, bg = "transparent"
+)
+
+ggsave(
+  COMBINED_SVG_FILE, combined_plot,
+  width = COMBINED_FIG_WIDTH, height = COMBINED_FIG_HEIGHT,
+  units = "in", device = svglite::svglite, bg = "transparent"
+)
+
+# 14) SAVE TABLES --------------------------------------------
+excel_sheets <- list()
+
+for (site_i in sites) {
+  safe_site <- SITE_FILE_TAGS[[site_i]]
+  
+  summary_export <- site_results[[site_i]]$summary %>%
+    mutate(
+      compound = as.character(compound),
+      site = as.character(site),
+      residue = as.character(residue)
+    )
+  
+  ranking_export <- site_results[[site_i]]$ranking
+  
+  excel_sheets[[paste0(safe_site, "_top10")]] <- summary_export
+  excel_sheets[[paste0(safe_site, "_ranking")]] <- ranking_export
+  
+  readr::write_csv(
+    summary_export,
+    file.path(OUTPUT_DIR, paste0("Top10_hotspots_LIN_NER_", safe_site, ".csv"))
+  )
+}
+
+writexl::write_xlsx(excel_sheets, EXCEL_OUTPUT)
+
+# 15) CONSOLE SUMMARY ----------------------------------------
+cat("\n============================================================\n")
+cat("ANALYSIS COMPLETE\n")
+cat("============================================================\n")
+
+for (site_i in sites) {
+  cat("\n", site_i, "\n", sep = "")
+  cat("Compounds: ", paste(site_results[[site_i]]$compounds, collapse = ", "), "\n", sep = "")
+  cat("Top hotspots:\n")
+  
+  top_i <- site_results[[site_i]]$top_hotspots
+  for (row_i in seq_len(nrow(top_i))) {
+    cat(sprintf(
+      "  %d. %s (%d interacting poses)\n",
+      top_i$hotspot_rank[row_i],
+      top_i$residue[row_i],
+      top_i$interacting_poses[row_i]
+    ))
+  }
+}
+
+cat("\nBubble-size statistic: ")
+if (tolower(AFFINITY_FOR_SIZE) == "mean") {
+  cat("mean affinity among poses interacting with each residue.\n")
+} else {
+  cat("best affinity among poses interacting with each residue.\n")
+}
+
+cat("More negative affinity = larger bubble.\n")
+cat("\nFiles generated in:\n", OUTPUT_DIR, "\n", sep = "")
+
+for (site_i in sites) {
+  site_tag <- SITE_FILE_TAGS[[site_i]]
+  cat(" - ", file.path(OUTPUT_DIR, paste0("Top10_hotspots_LIN_NER_", site_tag, ".png")), "\n", sep = "")
+  cat(" - ", file.path(OUTPUT_DIR, paste0("Top10_hotspots_LIN_NER_", site_tag, "_transparent.png")), "\n", sep = "")
+  cat(" - ", file.path(OUTPUT_DIR, paste0("Top10_hotspots_LIN_NER_", site_tag, ".svg")), "\n", sep = "")
+}
+
+cat(" - ", COMBINED_PNG_FILE, "\n", sep = "")
+cat(" - ", COMBINED_PNG_TRANSPARENT_FILE, "\n", sep = "")
+cat(" - ", COMBINED_SVG_FILE, "\n", sep = "")
+cat(" - ", EXCEL_OUTPUT, "\n", sep = "")
