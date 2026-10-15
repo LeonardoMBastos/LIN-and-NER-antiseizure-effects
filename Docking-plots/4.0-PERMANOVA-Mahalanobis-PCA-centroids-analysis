@@ -1,0 +1,603 @@
+# =============================================================================
+# PERMANOVA + PERMDISP + MAHALANOBIS | PCA FINGERPRINTS | RSTUDIO
+# =============================================================================
+# Source: PCA_complete_results.xlsx from the preceding PCA script.
+# - PERMANOVA: all PC scores available for each binding site (Euclidean).
+#   When the PCA contains ALL components from the Hellinger fingerprint matrix,
+#   Euclidean distances between scores preserve the original distances.
+# - PERMDISP: diagnostic of equality of multivariate dispersions.
+# - Mahalanobis: pooled covariance and centroid distances in PC1 x PC2, as
+#   shown in the PCA graph (separate from the all-PC PERMANOVA).
+# - Box's M (optional): retained as an additional PC1-PC2 diagnostic.
+# - Independent analyses for BZD, BB and GABA; compounds read automatically.
+# - Output: PERMANOVA_Mahalanobis-[input filename without extension]
+#
+# IMPORTANT FOR INFERENCE:
+# Poses from the same docking run are not necessarily independent experimental
+# replicates. By default, each POSE is an observation and permutation p-values
+# must be considered EXPLORATORY unless independence can be justified.
+# If independent run IDs are supplied in the Scores_all_PCs worksheet, set
+# ANALYSIS_UNIT <- "run" and RUN_ID_COLUMN accordingly. In that mode scores
+# are averaged within independent run x compound x site before all tests.
+# =============================================================================
+
+# 0. PARAMETERS ---------------------------------------------------------------
+N_PERMUTATIONS      <- 9999L
+RANDOM_SEED         <- 20261015L
+FDR_METHOD          <- "BH"
+FDR_THRESHOLD       <- 0.05
+HEATMAP_DPI         <- 400L
+SINGULARITY_TOLERANCE <- 1e-10
+
+ANALYSIS_UNIT       <- "pose"   # "pose" OR "run"
+RUN_ID_COLUMN       <- "run_ID" # only needed when ANALYSIS_UNIT = "run"
+
+# 1. PACKAGES -----------------------------------------------------------------
+required_packages <- c("openxlsx", "vegan", "MASS", "ggplot2")
+missing_packages <- required_packages[!vapply(
+  required_packages, requireNamespace, logical(1), quietly = TRUE
+)]
+if (length(missing_packages)) install.packages(missing_packages)
+
+library(openxlsx)
+library(ggplot2)
+# vegan:: and MASS:: are called explicitly to avoid name conflicts.
+has_biotools <- requireNamespace("biotools", quietly = TRUE)
+
+if (!ANALYSIS_UNIT %in% c("pose", "run")) {
+  stop('ANALYSIS_UNIT must be "pose" or "run".')
+}
+
+# 2. FILE SELECTION, VALIDATION, OUTPUT DIRECTORY ------------------------------
+message("Select PCA_complete_results.xlsx (LIN/NER or GER/GERAC)")
+input_file <- file.choose()
+if (!tolower(tools::file_ext(input_file)) %in% c("xlsx", "xlsm")) {
+  stop("Select a valid .xlsx or .xlsm workbook.")
+}
+
+input_stem <- tools::file_path_sans_ext(basename(input_file))
+output_dir <- file.path(dirname(input_file), paste0("PERMANOVA_Mahalanobis-", input_stem))
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+sheet_names <- openxlsx::getSheetNames(input_file)
+required_sheets <- c("Scores_all_PCs", "Variance_all_PCs")
+if (!all(required_sheets %in% sheet_names)) {
+  stop("Missing workbook sheets: ", paste(setdiff(required_sheets, sheet_names), collapse = ", "))
+}
+
+scores <- openxlsx::read.xlsx(input_file, sheet = "Scores_all_PCs", check.names = FALSE)
+variance_table <- openxlsx::read.xlsx(input_file, sheet = "Variance_all_PCs", check.names = FALSE)
+
+required_score_columns <- c("site", "compound", "PC1", "PC2")
+missing_columns <- setdiff(required_score_columns, names(scores))
+if (length(missing_columns)) {
+  stop("Missing score columns: ", paste(missing_columns, collapse = ", "))
+}
+required_variance_columns <- c("site", "PC", "variance_percent")
+if (!all(required_variance_columns %in% names(variance_table))) {
+  stop("Variance_all_PCs needs site, PC and variance_percent columns.")
+}
+
+score_pc_names <- grep("^PC[0-9]+$", names(scores), value = TRUE)
+score_pc_names <- score_pc_names[order(as.integer(sub("^PC", "", score_pc_names)))]
+
+scores$site <- trimws(as.character(scores$site))
+scores$compound <- trimws(as.character(scores$compound))
+for (pc_name in score_pc_names) {
+  scores[[pc_name]] <- suppressWarnings(as.numeric(
+    gsub(",", ".", as.character(scores[[pc_name]]), fixed = TRUE)
+  ))
+}
+variance_table$site <- trimws(as.character(variance_table$site))
+variance_table$PC <- trimws(as.character(variance_table$PC))
+variance_table$variance_percent <- suppressWarnings(as.numeric(
+  gsub(",", ".", as.character(variance_table$variance_percent), fixed = TRUE)
+))
+
+valid <- !is.na(scores$site) & nzchar(scores$site) &
+  !is.na(scores$compound) & nzchar(scores$compound) &
+  is.finite(scores$PC1) & is.finite(scores$PC2)
+if (any(!valid)) warning(sum(!valid), " row(s) removed: invalid site, compound, PC1 or PC2.")
+scores <- scores[valid, , drop = FALSE]
+if (!nrow(scores)) stop("No valid PCA observations remain.")
+
+if (ANALYSIS_UNIT == "run") {
+  if (!RUN_ID_COLUMN %in% names(scores)) {
+    stop("ANALYSIS_UNIT='run' requires column '", RUN_ID_COLUMN,
+         "' in Scores_all_PCs. Preserve run IDs when exporting PCA scores.")
+  }
+  scores[[RUN_ID_COLUMN]] <- trimws(as.character(scores[[RUN_ID_COLUMN]]))
+  if (anyNA(scores[[RUN_ID_COLUMN]]) || any(!nzchar(scores[[RUN_ID_COLUMN]]))) {
+    stop("Missing run identifiers. Every row needs an independent run ID.")
+  }
+  # Determine site-specific PC availability BEFORE run aggregation.
+} else {
+  warning(paste0(
+    "ANALYSIS_UNIT='pose': permutation p-values are EXPLORATORY unless ",
+    "docking poses are legitimately independent sampling units. ",
+    "Repeated poses from a single run do not establish replication."
+  ))
+}
+
+preferred_site_order <- c("BZD", "BB", "GABA")
+sites_present <- unique(scores$site)
+sites <- c(preferred_site_order[preferred_site_order %in% sites_present],
+           setdiff(sites_present, preferred_site_order))
+
+# 3. HELPERS ------------------------------------------------------------------
+get_variance <- function(site_name, pc_name) {
+  v <- variance_table$variance_percent[
+    variance_table$site == site_name & variance_table$PC == pc_name
+  ]
+  if (!length(v)) NA_real_ else v[[1]]
+}
+
+empty_table <- function() data.frame()
+
+format_dataframe <- function(x) {
+  if (is.null(x) || !nrow(x)) return(data.frame())
+  as.data.frame(x, stringsAsFactors = FALSE)
+}
+
+combine_nonempty <- function(x) {
+  x <- Filter(function(d) !is.null(d) && is.data.frame(d) && nrow(d) > 0L, x)
+  if (!length(x)) return(data.frame())
+  result <- do.call(rbind, x)
+  rownames(result) <- NULL
+  result
+}
+
+site_pc_columns <- function(site_df, site_name) {
+  has_any <- vapply(score_pc_names, function(col) any(is.finite(site_df[[col]])), logical(1))
+  cols <- score_pc_names[has_any]
+  if (length(cols) < 2L) stop("Fewer than two components for site ", site_name)
+  not_complete <- cols[!vapply(cols, function(col) all(is.finite(site_df[[col]])), logical(1))]
+  if (length(not_complete)) {
+    stop("Partially missing PCs at site ", site_name, ": ",
+         paste(not_complete, collapse = ", "),
+         ". Resolve missing values rather than silently omitting observations.")
+  }
+  expected <- unique(variance_table$PC[variance_table$site == site_name])
+  expected <- expected[grepl("^PC[0-9]+$", expected)]
+  unavailable <- setdiff(expected, cols)
+  if (length(unavailable)) {
+    warning("Site ", site_name, " is missing expected PC score columns: ",
+            paste(unavailable, collapse = ", "),
+            ". PERMANOVA cannot claim to include the complete PCA space.")
+  }
+  cols
+}
+
+collapse_if_requested <- function(site_df, cols) {
+  if (ANALYSIS_UNIT == "pose") {
+    return(site_df[, c("site", "compound", cols), drop = FALSE])
+  }
+  # Each row becomes one independent RUN, the mean PC scores across its poses.
+  aggregate(site_df[, cols, drop = FALSE],
+            by = list(site = site_df$site,
+                      compound = site_df$compound,
+                      run_id = site_df[[RUN_ID_COLUMN]]),
+            FUN = mean)
+}
+
+extract_permanova <- function(model) {
+  tab <- as.data.frame(model)
+  i <- which(rownames(tab) == "compound")
+  if (!length(i)) i <- 1L
+  r <- which(rownames(tab) == "Residual")
+  data.frame(
+    df_effect = as.numeric(tab$Df[i[1]]),
+    df_residual = if (length(r)) as.numeric(tab$Df[r[1]]) else NA_real_,
+    SumOfSqs = as.numeric(tab$SumOfSqs[i[1]]),
+    R2 = as.numeric(tab$R2[i[1]]),
+    pseudo_F = as.numeric(tab$F[i[1]]),
+    p_value = as.numeric(tab[["Pr(>F)"]][i[1]])
+  )
+}
+
+run_adonis <- function(pc_matrix, groups, nperm, seed) {
+  set.seed(seed)
+  dist_mat <- stats::dist(pc_matrix, method = "euclidean")
+  metadata <- data.frame(compound = droplevels(factor(groups)))
+  vegan::adonis2(dist_mat ~ compound, data = metadata,
+                 permutations = nperm, by = "terms")
+}
+
+run_permdisp <- function(pc_matrix, groups, nperm, seed) {
+  groups <- droplevels(factor(groups))
+  if (any(table(groups) < 2L) || length(groups) <= nlevels(groups)) {
+    return(list(stats = data.frame(F = NA_real_, p_value = NA_real_,
+                                   df_effect = NA_real_, df_residual = NA_real_,
+                                   note = "At least 2 observations per group required"),
+                group_distances = data.frame()))
+  }
+  d <- stats::dist(pc_matrix, method = "euclidean")
+  result <- vegan::betadisper(d, group = groups, type = "median", bias.adjust = TRUE)
+  set.seed(seed)
+  test <- vegan::permutest(result, permutations = nperm)
+  tab <- as.data.frame(test$tab)
+  group_distances <- aggregate(result$distances,
+                               by = list(compound = as.character(groups)),
+                               FUN = function(x) c(n = length(x),
+                                                   mean = mean(x),
+                                                   sd = stats::sd(x)))
+  group_distances <- data.frame(
+    compound = group_distances$compound,
+    n = group_distances$x[, "n"],
+    mean_distance_to_median = group_distances$x[, "mean"],
+    sd_distance_to_median = group_distances$x[, "sd"]
+  )
+  list(
+    stats = data.frame(
+      F = as.numeric(tab[["F"]][1]),
+      p_value = as.numeric(tab[["Pr(>F)"]][1]),
+      df_effect = as.numeric(tab[["Df"]][1]),
+      df_residual = if (nrow(tab) >= 2) as.numeric(tab[["Df"]][2]) else NA_real_,
+      note = "Distance to spatial median; permutation test"
+    ),
+    group_distances = group_distances
+  )
+}
+
+pooled_covariance <- function(X, groups) {
+  groups <- droplevels(factor(groups))
+  numer <- matrix(0, nrow = 2L, ncol = 2L,
+                  dimnames = list(c("PC1", "PC2"), c("PC1", "PC2")))
+  denom <- 0L
+  for (g in levels(groups)) {
+    sample_x <- X[groups == g, , drop = FALSE]
+    if (nrow(sample_x) < 2L) next
+    numer <- numer + (nrow(sample_x) - 1L) * stats::cov(sample_x)
+    denom <- denom + nrow(sample_x) - 1L
+  }
+  if (denom <= 0L) return(NULL)
+  numer / denom
+}
+
+invert_covariance <- function(S) {
+  eig <- tryCatch(eigen(S, symmetric = TRUE, only.values = TRUE)$values,
+                  error = function(e) rep(NA_real_, 2L))
+  if (all(is.finite(eig)) && min(abs(eig)) >= SINGULARITY_TOLERANCE) {
+    inverse <- tryCatch(solve(S), error = function(e) NULL)
+    if (!is.null(inverse)) return(list(inverse = inverse, method = "Standard inverse"))
+  }
+  warning("Near-singular pooled covariance: using generalized inverse (MASS::ginv).")
+  list(inverse = MASS::ginv(S), method = "Generalized inverse (MASS::ginv)")
+}
+
+as_matrix_export <- function(M, row_label = "compound") {
+  result <- data.frame(M, check.names = FALSE)
+  result <- cbind(setNames(data.frame(rownames(M)), row_label), result)
+  rownames(result) <- NULL
+  result
+}
+
+# 4. ANALYSIS BY BINDING SITE ------------------------------------------------
+permanova_omnibus_list <- list()
+permanova_pairwise_list <- list()
+permdisp_list <- list()
+permdisp_groups_list <- list()
+mahalanobis_list <- list()
+mahalanobis_matrices <- list()
+pooled_covariance_matrices <- list()
+centroids_list <- list()
+boxm_list <- list()
+variance_list <- list()
+sample_sizes_list <- list()
+pc_used_list <- list()
+
+for (site_index in seq_along(sites)) {
+  site_name <- sites[[site_index]]
+  message("\n==============================================")
+  message("SITE: ", site_name)
+  site_original <- scores[scores$site == site_name, , drop = FALSE]
+  pc_cols <- site_pc_columns(site_original, site_name)
+  site_data <- collapse_if_requested(site_original, pc_cols)
+  group <- droplevels(factor(site_data$compound))
+  if (nlevels(group) < 2L) {
+    warning("Site ", site_name, " has fewer than two compounds; skipped.")
+    next
+  }
+  counts <- table(group)
+  if (any(counts < 2L)) {
+    warning("Site ", site_name, " has groups with n<2. PERMANOVA assumptions/diagnostics may be inadequate.")
+  }
+  if (nrow(site_data) <= nlevels(group)) {
+    warning("Site ", site_name, " has zero residual degrees of freedom; skipped.")
+    next
+  }
+  
+  X_all <- as.matrix(site_data[, pc_cols, drop = FALSE])
+  storage.mode(X_all) <- "double"
+  X_12 <- as.matrix(site_data[, c("PC1", "PC2"), drop = FALSE])
+  storage.mode(X_12) <- "double"
+  
+  sample_sizes_list[[site_name]] <- data.frame(
+    site = site_name,
+    compound = names(counts),
+    n = as.integer(counts),
+    unit = ANALYSIS_UNIT
+  )
+  pc_used_list[[site_name]] <- data.frame(
+    site = site_name, n_PCs = length(pc_cols),
+    first_PC = pc_cols[1], last_PC = tail(pc_cols, 1),
+    analysis_unit = ANALYSIS_UNIT,
+    distance = "Euclidean distance on all available PC scores"
+  )
+  variance_list[[site_name]] <- data.frame(
+    site = site_name,
+    PC1_variance_percent = get_variance(site_name, "PC1"),
+    PC2_variance_percent = get_variance(site_name, "PC2"),
+    PC1_PC2_total_percent = sum(c(get_variance(site_name, "PC1"),
+                                  get_variance(site_name, "PC2")), na.rm = TRUE)
+  )
+  # GLOBAL PERMANOVA ----------------------------------------------------------
+  omnibus <- tryCatch(
+    run_adonis(X_all, group, N_PERMUTATIONS, RANDOM_SEED + site_index * 10000L),
+    error = function(e) {
+      warning("PERMANOVA failed in ", site_name, ": ", conditionMessage(e))
+      NULL
+    }
+  )
+  if (!is.null(omnibus)) {
+    permanova_omnibus_list[[site_name]] <- cbind(
+      data.frame(site = site_name, n = nrow(site_data),
+                 groups = nlevels(group), PCs_used = length(pc_cols),
+                 permutations = N_PERMUTATIONS,
+                 analysis_unit = ANALYSIS_UNIT),
+      extract_permanova(omnibus)
+    )
+  }
+  
+  # PERMDISP -----------------------------------------------------------------
+  dispersion <- tryCatch(
+    run_permdisp(X_all, group, N_PERMUTATIONS,
+                 RANDOM_SEED + site_index * 10000L + 1L),
+    error = function(e) {
+      warning("PERMDISP failed in ", site_name, ": ", conditionMessage(e))
+      NULL
+    }
+  )
+  if (!is.null(dispersion)) {
+    permdisp_list[[site_name]] <- cbind(
+      data.frame(site = site_name, n = nrow(site_data),
+                 groups = nlevels(group), PCs_used = length(pc_cols),
+                 permutations = N_PERMUTATIONS),
+      dispersion$stats
+    )
+    if (nrow(dispersion$group_distances)) {
+      permdisp_groups_list[[site_name]] <- cbind(
+        data.frame(site = site_name), dispersion$group_distances
+      )
+    }
+  }
+  
+  # PAIRWISE PERMANOVA --------------------------------------------------------
+  pairs <- combn(levels(group), 2L, simplify = FALSE)
+  for (pair_i in seq_along(pairs)) {
+    pair <- pairs[[pair_i]]
+    keep <- as.character(group) %in% pair
+    pair_X <- X_all[keep, , drop = FALSE]
+    pair_group <- droplevels(group[keep])
+    if (nrow(pair_X) <= 2L || any(table(pair_group) < 2L)) {
+      warning("Pairwise ", site_name, " ", paste(pair, collapse = "/"),
+              ": insufficient replication; test skipped.")
+      next
+    }
+    pair_fit <- tryCatch(
+      run_adonis(pair_X, pair_group, N_PERMUTATIONS,
+                 RANDOM_SEED + site_index * 10000L + pair_i * 10L),
+      error = function(e) {
+        warning("Pairwise PERMANOVA failed in ", site_name, " [",
+                paste(pair, collapse = " vs "), "]: ", conditionMessage(e))
+        NULL
+      }
+    )
+    if (!is.null(pair_fit)) {
+      permanova_pairwise_list[[length(permanova_pairwise_list) + 1L]] <- cbind(
+        data.frame(site = site_name, compound_1 = pair[[1]], compound_2 = pair[[2]],
+                   n_1 = as.integer(sum(pair_group == pair[[1]])),
+                   n_2 = as.integer(sum(pair_group == pair[[2]])),
+                   PCs_used = length(pc_cols), permutations = N_PERMUTATIONS),
+        extract_permanova(pair_fit)
+      )
+    }
+  }
+  
+  # MAHALANOBIS: ORIGINAL PC1 x PC2 SPACE -------------------------------------
+  compound_centroids <- do.call(rbind, lapply(levels(group), function(g) {
+    colMeans(X_12[group == g, , drop = FALSE])
+  }))
+  rownames(compound_centroids) <- levels(group)
+  colnames(compound_centroids) <- c("PC1", "PC2")
+  centroids_list[[site_name]] <- data.frame(
+    site = site_name, compound = rownames(compound_centroids),
+    PC1_centroid = compound_centroids[, 1],
+    PC2_centroid = compound_centroids[, 2],
+    row.names = NULL
+  )
+  
+  S <- pooled_covariance(X_12, group)
+  if (!is.null(S)) {
+    pooled_covariance_matrices[[site_name]] <- S
+    inverse_info <- invert_covariance(S)
+    Sinv <- inverse_info$inverse
+    D <- matrix(0, nrow = nlevels(group), ncol = nlevels(group),
+                dimnames = list(levels(group), levels(group)))
+    for (pair in pairs) {
+      delta <- as.numeric(compound_centroids[pair[[1]], ] -
+                            compound_centroids[pair[[2]], ])
+      euclidean <- sqrt(sum(delta^2))
+      distance_squared <- as.numeric(t(delta) %*% Sinv %*% delta)
+      if (is.finite(distance_squared) && distance_squared < 0 &&
+          abs(distance_squared) < 1e-10) distance_squared <- 0
+      distance <- if (is.finite(distance_squared) && distance_squared >= 0)
+        sqrt(distance_squared) else NA_real_
+      D[pair[[1]], pair[[2]]] <- distance
+      D[pair[[2]], pair[[1]]] <- distance
+      mahalanobis_list[[length(mahalanobis_list) + 1L]] <- data.frame(
+        site = site_name, compound_1 = pair[[1]], compound_2 = pair[[2]],
+        PC1_centroid_compound_1 = compound_centroids[pair[[1]], "PC1"],
+        PC2_centroid_compound_1 = compound_centroids[pair[[1]], "PC2"],
+        PC1_centroid_compound_2 = compound_centroids[pair[[2]], "PC1"],
+        PC2_centroid_compound_2 = compound_centroids[pair[[2]], "PC2"],
+        delta_PC1 = delta[[1]], delta_PC2 = delta[[2]],
+        Euclidean_D_PC1_PC2 = euclidean,
+        Mahalanobis_D = distance, Mahalanobis_D2 = distance_squared,
+        covariance_inverse_method = inverse_info$method
+      )
+    }
+    mahalanobis_matrices[[site_name]] <- D
+  }
+  
+  # OPTIONAL BOX'S M: ONLY IN PC1 x PC2 ---------------------------------------
+  if (has_biotools && all(counts >= 3L)) {
+    b <- tryCatch(suppressWarnings(biotools::boxM(X_12, grouping = group)),
+                  error = function(e) NULL)
+    if (!is.null(b)) {
+      boxm_list[[site_name]] <- data.frame(
+        site = site_name,
+        variables = "PC1 + PC2",
+        chi_square = unname(as.numeric(b$statistic)),
+        df = unname(as.numeric(b$parameter)),
+        p_value = as.numeric(b$p.value)
+      )
+    }
+  }
+}
+
+# 5. COLLECT RESULTS AND APPLY FDR --------------------------------------------
+permanova_omnibus <- combine_nonempty(permanova_omnibus_list)
+permanova_pairwise <- combine_nonempty(permanova_pairwise_list)
+permdisp_tests <- combine_nonempty(permdisp_list)
+permdisp_groups <- combine_nonempty(permdisp_groups_list)
+mahalanobis_pairs <- combine_nonempty(mahalanobis_list)
+group_centroids <- combine_nonempty(centroids_list)
+boxm_tests <- combine_nonempty(boxm_list)
+variance_summary <- combine_nonempty(variance_list)
+sample_sizes <- combine_nonempty(sample_sizes_list)
+pc_used_summary <- combine_nonempty(pc_used_list)
+
+if (nrow(permanova_pairwise)) {
+  permanova_pairwise$FDR <- NA_real_
+  for (site_name in unique(permanova_pairwise$site)) {
+    idx <- which(permanova_pairwise$site == site_name)
+    permanova_pairwise$FDR[idx] <- p.adjust(permanova_pairwise$p_value[idx], method = FDR_METHOD)
+  }
+  permanova_pairwise$significant_FDR <- !is.na(permanova_pairwise$FDR) &
+    permanova_pairwise$FDR < FDR_THRESHOLD
+}
+
+# 6. MAHALANOBIS HEATMAPS -----------------------------------------------------
+for (site_name in names(mahalanobis_matrices)) {
+  M <- mahalanobis_matrices[[site_name]]
+  dat_heat <- as.data.frame(as.table(M))
+  names(dat_heat) <- c("compound_1", "compound_2", "distance")
+  dat_heat$compound_1 <- factor(dat_heat$compound_1, levels = rownames(M))
+  dat_heat$compound_2 <- factor(dat_heat$compound_2, levels = rev(colnames(M)))
+  p <- ggplot(dat_heat, aes(x = compound_1, y = compound_2, fill = distance)) +
+    geom_tile(color = "grey80", linewidth = 0.45) +
+    geom_text(aes(label = ifelse(is.finite(distance), sprintf("%.2f", distance), "NA")),
+              size = 4) +
+    scale_fill_gradient(low = "white", high = "grey35", na.value = "grey90") +
+    coord_fixed() +
+    labs(title = paste0(site_name, " - Mahalanobis distance (PC1 x PC2)"),
+         x = NULL, y = NULL, fill = "Mahalanobis D") +
+    theme_classic(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          plot.title = element_text(face = "bold"))
+  ggsave(filename = file.path(output_dir, paste0("Mahalanobis_PC1_PC2_", site_name, ".png")),
+         plot = p, width = 7, height = 5.5, units = "in",
+         dpi = HEATMAP_DPI, bg = "white")
+}
+
+# 7. EXCEL EXPORT -------------------------------------------------------------
+analysis_settings <- data.frame(
+  parameter = c(
+    "Input workbook", "PERMANOVA source", "PERMANOVA distance", "PERMANOVA formula",
+    "PERMANOVA analysis unit", "PERMANOVA permutations", "Random seed",
+    "Pairwise adjustment", "FDR threshold", "PERMDISP distance",
+    "PERMDISP test", "Mahalanobis dimensions", "Mahalanobis covariance",
+    "Pose-level inference warning", "Run-level inference"
+  ),
+  value = c(
+    basename(input_file), "All available PCA scores at each binding site",
+    "Euclidean", "distance ~ compound (independently by site)",
+    ANALYSIS_UNIT, as.character(N_PERMUTATIONS), as.character(RANDOM_SEED),
+    FDR_METHOD, as.character(FDR_THRESHOLD), "Euclidean on all available PC scores",
+    "vegan::betadisper(type='median') + vegan::permutest",
+    "PC1 and PC2 only", "Pooled within-compound covariance",
+    "Pose-level p-values exploratory unless poses are independent sampling units",
+    "If ANALYSIS_UNIT='run', mean PCA score per site x compound x independent run"
+  ),
+  stringsAsFactors = FALSE
+)
+
+wb <- openxlsx::createWorkbook()
+add_table_sheet <- function(wb, tab_name, dat) {
+  openxlsx::addWorksheet(wb, tab_name)
+  if (is.null(dat) || !is.data.frame(dat) || !ncol(dat) || !nrow(dat)) {
+    openxlsx::writeData(wb, tab_name, "No results available")
+    return(invisible(NULL))
+  }
+  openxlsx::writeData(wb, tab_name, dat)
+  header <- openxlsx::createStyle(textDecoration = "bold", border = "Bottom")
+  openxlsx::addStyle(wb, tab_name, style = header, rows = 1L,
+                     cols = seq_len(ncol(dat)), gridExpand = TRUE)
+  openxlsx::freezePane(wb, tab_name, firstRow = TRUE)
+  openxlsx::setColWidths(wb, tab_name, cols = seq_len(ncol(dat)), widths = "auto")
+}
+
+add_table_sheet(wb, "Analysis_settings", analysis_settings)
+add_table_sheet(wb, "Explained_variance", variance_summary)
+add_table_sheet(wb, "PCs_used", pc_used_summary)
+add_table_sheet(wb, "Sample_sizes", sample_sizes)
+add_table_sheet(wb, "PERMANOVA_omnibus", permanova_omnibus)
+add_table_sheet(wb, "PERMANOVA_pairwise", permanova_pairwise)
+add_table_sheet(wb, "PERMDISP", permdisp_tests)
+add_table_sheet(wb, "PERMDISP_groups", permdisp_groups)
+add_table_sheet(wb, "Mahalanobis_pairs", mahalanobis_pairs)
+add_table_sheet(wb, "Group_centroids", group_centroids)
+if (nrow(boxm_tests)) add_table_sheet(wb, "BoxM_PC1_PC2", boxm_tests)
+
+for (site_name in names(mahalanobis_matrices)) {
+  M <- mahalanobis_matrices[[site_name]]
+  add_table_sheet(wb, substr(paste0("D_", site_name), 1L, 31L), as_matrix_export(M))
+}
+for (site_name in names(pooled_covariance_matrices)) {
+  S <- pooled_covariance_matrices[[site_name]]
+  add_table_sheet(wb, substr(paste0("Cov_PC1PC2_", site_name), 1L, 31L),
+                  as_matrix_export(S, "variable"))
+}
+
+output_excel <- file.path(output_dir, "PERMANOVA_Mahalanobis_results.xlsx")
+openxlsx::saveWorkbook(wb, output_excel, overwrite = TRUE)
+
+write.csv(permanova_omnibus,
+          file.path(output_dir, "PERMANOVA_omnibus.csv"), row.names = FALSE)
+write.csv(permanova_pairwise,
+          file.path(output_dir, "PERMANOVA_pairwise_BH_FDR.csv"), row.names = FALSE)
+write.csv(permdisp_tests,
+          file.path(output_dir, "PERMDISP_tests.csv"), row.names = FALSE)
+write.csv(mahalanobis_pairs,
+          file.path(output_dir, "Mahalanobis_pairs_PC1_PC2.csv"), row.names = FALSE)
+
+# 8. CONSOLE REPORT -----------------------------------------------------------
+cat("\n============================================================\n")
+cat("PERMANOVA + PERMDISP + MAHALANOBIS COMPLETED\n")
+cat("============================================================\n")
+cat("Unit: ", ANALYSIS_UNIT, " | Permutations: ", N_PERMUTATIONS, "\n", sep = "")
+cat("PERMANOVA: all PC scores, Euclidean; Mahalanobis: PC1/PC2 only.\n\n")
+cat("PERMANOVA (omnibus):\n")
+print(permanova_omnibus, row.names = FALSE)
+cat("\nPERMANOVA (pairwise, BH adjusted within each site):\n")
+print(permanova_pairwise, row.names = FALSE)
+cat("\nPERMDISP:\n")
+print(permdisp_tests, row.names = FALSE)
+cat("\nMAHALANOBIS:\n")
+print(mahalanobis_pairs, row.names = FALSE)
+if (ANALYSIS_UNIT == "pose") cat(
+  "\nCAUTION: pose-level permutation p-values may be pseudoreplicated. ",
+  "Report as exploratory unless independent replicates are justified.\n", sep = ""
+)
+cat("\nOutput: ", output_dir, "\nExcel: ", output_excel, "\n", sep = "")
