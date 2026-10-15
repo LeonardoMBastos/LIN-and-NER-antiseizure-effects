@@ -8,7 +8,8 @@
 #   site | compound | affinity
 #
 # Compounds:
-#   DZP | PHB | GABA | GER | GERAC
+#   DZP | PHB | GABA | LIN | NER
+#   LIN accepts LIN/LINALOOL/LINALOL; NER accepts NER/NEROLIDOL
 #
 # Organization:
 #   Cloud
@@ -170,23 +171,18 @@ map_compound <- function(x) {
     x2 == "GABA" ~
       "GABA",
 
+    # LIN: linalool / linalol
     x2 %in% c(
-      "GER",
-      "GERANIOL"
-    ) ~ "GER",
+      "LIN",
+      "LINALOOL",
+      "LINALOL"
+    ) ~ "LIN",
 
+    # NER: nerolidol
     x2 %in% c(
-      "GERAC",
-      "GER AC",
-      "GER-AC",
-      "GER_AC",
-      "GERANYL ACETATE",
-      "GERANYL-ACETATE",
-      "GERANYL_ACETATE",
-      "GERANYLACETATE",
-      "ACETATO DE GERANILA",
-      "GERANIOL ACETATE"
-    ) ~ "GERAC",
+      "NER",
+      "NEROLIDOL"
+    ) ~ "NER",
 
     TRUE ~
       NA_character_
@@ -259,8 +255,8 @@ compound_order <- c(
   "DZP",
   "PHB",
   "GABA",
-  "GER",
-  "GERAC"
+  "LIN",
+  "NER"
 )
 
 site_order <- c(
@@ -304,6 +300,16 @@ if (nrow(df_plot) == 0) {
   )
 }
 
+# Warn if a compound name was not recognized (to prevent silent omissions).
+unknown_compounds <- unique(
+  as.character(df$compound)[is.na(map_compound(df$compound))]
+)
+if (length(unknown_compounds) > 0) {
+  warning("Ignored unrecognized compound(s): ",
+          paste(unknown_compounds, collapse = ", "),
+          call. = FALSE)
+}
+
 
 df_plot$compound_std <- factor(
   df_plot$compound_std,
@@ -331,11 +337,13 @@ colors <- c(
   "GABA" =
     "#C06000",
 
-  "GER" =
-    "#84A85E",
+  # LIN 400
+  "LIN" =
+    "#92C59A",
 
-  "GERAC" =
-    "#D13232"
+  # NER 400
+  "NER" =
+    "#386486"
 )
 
 
@@ -469,8 +477,8 @@ cloud_offset <- c(
   "DZP"   =  0.100,
   "PHB"   =  0.050,
   "GABA"  =  0.000,
-  "GER"   = -0.050,
-  "GERAC" = -0.100
+  "LIN"   = -0.050,
+  "NER" = -0.100
 )
 
 
@@ -479,8 +487,8 @@ box_offset <- c(
   "DZP"   =  0.070,
   "PHB"   =  0.035,
   "GABA"  =  0.000,
-  "GER"   = -0.035,
-  "GERAC" = -0.070
+  "LIN"   = -0.035,
+  "NER" = -0.070
 )
 
 
@@ -1986,7 +1994,7 @@ print(p)
 
 output_file <- file.path(
   output_dir,
-  "raincloud_all_binding_sites_poster.png"
+  "raincloud_LIN_NER_all_binding_sites_poster.png"
 )
 
 
@@ -2031,7 +2039,7 @@ cat("Black with 90% transparency\n")
 cat("alpha = 0.10\n")
 
 cat("\nClouds, points and boxplots:\n")
-cat("Unchanged\n")
+cat("Original layout and alpha settings preserved; LIN/NER colors updated\n")
 
 cat("\nOutput:\n")
 cat(output_file)
