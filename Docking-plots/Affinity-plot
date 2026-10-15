@@ -1,33 +1,35 @@
 # ============================================================
-# RSTUDIO — RAINCLOUD PLOT
-# HORIZONTAL POSTER VERSION
+# VERTICAL RAINCLOUD PLOT — LIN / NER — ONE GRAPH PER BINDING SITE
 #
-# ONE FIGURE WITH THREE BINDING SITES
+# X = Compound
+# Y = Binding affinity (kcal/mol)
 #
-# Required CSV columns:
+# Plot organization for each compound:
+#   LEFT   = individual-observation band + overlaid boxplot
+#   RIGHT  = half-density cloud
+#
+# Y-axis rules used in this version:
+#   Benzodiazepine site:   0 to -10
+#   Barbiturate site:      0 to -8  (major tick every 2)
+#   GABA orthosteric site: 55 to -10
+#
+# More negative values appear visually higher.
+#
+# Required columns:
 #   site | compound | affinity
+# Compounds: DZP | PHB | GABA | LIN | NER
 #
-# Compounds:
-#   DZP | PHB | GABA | LIN | NER
-#   LIN accepts LIN/LINALOOL/LINALOL; NER accepts NER/NEROLIDOL
-#
-# Organization:
-#   Cloud
-#   Individual observations
-#   Boxplot
-#
-# Binding-site distinction:
-#   BLACK with 90% transparency
-#   alpha = 0.10
+# Also accepts:
+#   binding_site instead of site
 #
 # Output:
-#   Transparent PNG
+#   One transparent PNG for each binding site.
 # ============================================================
 
 
-# ------------------------------------------------------------
-# 1. INSTALL AND LOAD PACKAGES
-# ------------------------------------------------------------
+# ============================================================
+# 1. PACKAGES
+# ============================================================
 
 packages <- c(
   "ggplot2",
@@ -50,18 +52,77 @@ library(readr)
 set.seed(123)
 
 
+# ============================================================
+# 2. GRAPH SETTINGS
+# ============================================================
+
+FONT_FAMILY <- "Arial"
+
+FIG_WIDTH  <- 5.2
+FIG_HEIGHT <- 5.8
+FIG_DPI    <- 600
+
+
 # ------------------------------------------------------------
-# 2. SELECT CSV FILE
+# Horizontal organization
 # ------------------------------------------------------------
+
+OBS_CENTER_OFFSET <- 0.145
+OBS_BAND_WIDTH    <- 0.140
+
+CLOUD_BASE_OFFSET <- 0.060
+CLOUD_WIDTH       <- 0.360
+
+COMPOUND_SPACING <- 0.82
+
+
+# ------------------------------------------------------------
+# Individual observations
+# ------------------------------------------------------------
+
+DOT_SIZE  <- 2.10
+DOT_ALPHA <- 0.58
+
+
+# ------------------------------------------------------------
+# Boxplots
+# ------------------------------------------------------------
+
+BOX_ALPHA     <- 0.24
+BOX_LINEWIDTH <- 0.65
+
+
+# ------------------------------------------------------------
+# Clouds
+# ------------------------------------------------------------
+
+CLOUD_ALPHA <- 0.42
+
+# Slightly stronger smoothing helps avoid jagged or oddly pinched
+# clouds, especially in small-N groups such as NER.
+DENSITY_ADJUST <- 1.45
+
+# Smaller tail trimming keeps the cloud from being cut too early.
+DENSITY_TAIL_FRACTION <- 0.003
+
+# Number of taper points added to return the cloud smoothly to the
+# baseline at both ends.
+CLOUD_TAPER_POINTS <- 30
+
+
+# ============================================================
+# 3. SELECT CSV
+# ============================================================
 
 cat("\n============================================\n")
 cat("SELECT CSV FILE\n")
 cat("============================================\n\n")
 
+# Always select the input file when running in RStudio,
+# avoiding accidental reuse of the preceding dataset.
 csv_file <- file.choose()
 
 if (tolower(tools::file_ext(csv_file)) != "csv") {
-
   stop(
     "\nThe selected file is not a CSV file.\n",
     "Run the script again and select a .csv file.\n"
@@ -75,9 +136,9 @@ cat(basename(csv_file))
 cat("\n\n")
 
 
-# ------------------------------------------------------------
-# 3. READ CSV
-# ------------------------------------------------------------
+# ============================================================
+# 4. READ CSV
+# ============================================================
 
 df <- read_csv(
   csv_file,
@@ -85,24 +146,21 @@ df <- read_csv(
 )
 
 
-# ------------------------------------------------------------
-# 4. ACCEPT binding_site AS ALTERNATIVE
-# ------------------------------------------------------------
+# ============================================================
+# 5. ACCEPT binding_site AS AN ALTERNATIVE
+# ============================================================
 
 if (
   !"site" %in% names(df) &&
   "binding_site" %in% names(df)
 ) {
-
-  names(df)[
-    names(df) == "binding_site"
-  ] <- "site"
+  names(df)[names(df) == "binding_site"] <- "site"
 }
 
 
-# ------------------------------------------------------------
-# 5. CHECK REQUIRED COLUMNS
-# ------------------------------------------------------------
+# ============================================================
+# 6. CHECK REQUIRED COLUMNS
+# ============================================================
 
 required_columns <- c(
   "site",
@@ -116,90 +174,84 @@ missing_columns <- setdiff(
 )
 
 if (length(missing_columns) > 0) {
-
   stop(
     paste0(
       "\nRequired columns:\n",
       "site\ncompound\naffinity\n\n",
-      "Columns found:\n",
-      paste(names(df), collapse = ", ")
+      "Missing columns:\n",
+      paste(missing_columns, collapse = ", "),
+      "\n\nColumns found:\n",
+      paste(names(df), collapse = ", "),
+      "\n"
     )
   )
 }
 
 
-# ------------------------------------------------------------
-# 6. NORMALIZE TEXT
-# ------------------------------------------------------------
+# ============================================================
+# 7. NORMALIZE TEXT
+# ============================================================
 
 normalize_text <- function(x) {
-
   x <- as.character(x)
   x <- trimws(x)
-
   x <- iconv(
     x,
     from = "",
     to = "ASCII//TRANSLIT"
   )
-
   toupper(x)
 }
 
 
-# ------------------------------------------------------------
-# 7. STANDARDIZE COMPOUNDS
-# ------------------------------------------------------------
+# ============================================================
+# 8. STANDARDIZE COMPOUNDS
+# ============================================================
 
 map_compound <- function(x) {
-
   x2 <- normalize_text(x)
-
+  
   dplyr::case_when(
-
     x2 %in% c(
       "DZP",
       "DIAZEPAM"
     ) ~ "DZP",
-
+    
     x2 %in% c(
       "PHB",
       "PHENOBARBITAL",
       "FENOBARBITAL"
     ) ~ "PHB",
-
-    x2 == "GABA" ~
-      "GABA",
-
-    # LIN: linalool / linalol
+    
+    x2 == "GABA" ~ "GABA",
+    
     x2 %in% c(
       "LIN",
       "LINALOOL",
       "LINALOL"
     ) ~ "LIN",
-
-    # NER: nerolidol
+    
     x2 %in% c(
       "NER",
-      "NEROLIDOL"
+      "NEROLIDOL",
+      "TRANS-NEROLIDOL",
+      "TRANS NEROLIDOL",
+      "TRANS_NEROLIDOL",
+      "TRANSNEROLIDOL"
     ) ~ "NER",
-
-    TRUE ~
-      NA_character_
+    
+    TRUE ~ NA_character_
   )
 }
 
-
-# ------------------------------------------------------------
-# 8. STANDARDIZE BINDING SITES
-# ------------------------------------------------------------
+# ============================================================
+# 9. STANDARDIZE BINDING SITES
+# ============================================================
 
 map_site <- function(x) {
-
   x2 <- normalize_text(x)
-
+  
   dplyr::case_when(
-
     x2 %in% c(
       "BENZODIAZEPINICOS",
       "BENZODIAZEPINAS",
@@ -211,9 +263,8 @@ map_site <- function(x) {
       "BZD SITE",
       "BZ",
       "BENZO"
-    ) ~
-      "Benzodiazepine site",
-
+    ) ~ "Benzodiazepine site",
+    
     x2 %in% c(
       "BARBITURICOS",
       "BARBITURATES",
@@ -224,9 +275,8 @@ map_site <- function(x) {
       "BARBITURIC SITE",
       "BB",
       "BARB"
-    ) ~
-      "Barbiturate site",
-
+    ) ~ "Barbiturate site",
+    
     x2 %in% c(
       "GABA",
       "GABA ORTOSTATICO",
@@ -238,18 +288,16 @@ map_site <- function(x) {
       "ORTHOSTERIC GABA",
       "GABA SITE",
       "GABA ORTHO"
-    ) ~
-      "GABA orthosteric site",
-
-    TRUE ~
-      NA_character_
+    ) ~ "GABA orthosteric site",
+    
+    TRUE ~ NA_character_
   )
 }
 
 
-# ------------------------------------------------------------
-# 9. ORDER
-# ------------------------------------------------------------
+# ============================================================
+# 10. ORDER
+# ============================================================
 
 compound_order <- c(
   "DZP",
@@ -266,1782 +314,674 @@ site_order <- c(
 )
 
 
-# ------------------------------------------------------------
-# 10. PREPARE DATA
-# ------------------------------------------------------------
+# ============================================================
+# 11. COLORS
+# ============================================================
+
+colors <- c(
+  "DZP"  = "#410257",
+  "PHB"  = "#8C7D37",
+  "GABA" = "#C06000",
+  "LIN"  = "#92C59A",
+  "NER"  = "#386486"
+)
+
+
+# ============================================================
+# 12. TITLES
+# ============================================================
+
+site_titles <- c(
+  "Benzodiazepine site" =
+    "Benzodiazepine site (α1/γ2 interface)",
+  
+  "Barbiturate site" =
+    "Barbiturate site (α1/β2 interface)",
+  
+  "GABA orthosteric site" =
+    "GABA orthosteric site (β2/α1 interface)"
+)
+
+
+# ============================================================
+# 13. OUTPUT FILE NAMES
+# ============================================================
+
+site_file_names <- c(
+  "Benzodiazepine site" =
+    "Raincloud_BZD_site_LIN_NER.png",
+  
+  "Barbiturate site" =
+    "Raincloud_Barbiturate_site_LIN_NER.png",
+  
+  "GABA orthosteric site" =
+    "Raincloud_GABA_site_LIN_NER.png"
+)
+
+
+# ============================================================
+# 14. PREPARE DATA
+# ============================================================
 
 df_plot <- df %>%
-
   mutate(
-
-    compound_std =
-      map_compound(compound),
-
-    site_std =
-      map_site(site),
-
-    affinity =
-      suppressWarnings(
-        as.numeric(affinity)
-      )
+    compound_std = map_compound(compound),
+    site_std = map_site(site),
+    affinity = suppressWarnings(as.numeric(affinity))
   ) %>%
-
   filter(
     !is.na(compound_std),
     !is.na(site_std),
-    !is.na(affinity)
+    !is.na(affinity),
+    is.finite(affinity)
   )
 
-
 if (nrow(df_plot) == 0) {
-
   stop(
     "\nNo valid observations remained after preprocessing.\n"
   )
 }
 
-# Warn if a compound name was not recognized (to prevent silent omissions).
-unknown_compounds <- unique(
-  as.character(df$compound)[is.na(map_compound(df$compound))]
-)
-if (length(unknown_compounds) > 0) {
-  warning("Ignored unrecognized compound(s): ",
-          paste(unknown_compounds, collapse = ", "),
-          call. = FALSE)
+# Inform the user when the newly introduced terpenoids are missing.
+missing_terpenoids <- setdiff(c("LIN", "NER"), unique(df_plot$compound_std))
+if (length(missing_terpenoids) > 0) {
+  warning(
+    paste0(
+      "Compounds not found in the selected CSV: ",
+      paste(missing_terpenoids, collapse = ", "),
+      ". Check the 'compound' column."
+    ),
+    call. = FALSE
+  )
 }
 
 
-df_plot$compound_std <- factor(
-  df_plot$compound_std,
-  levels = compound_order
-)
 
-df_plot$site_std <- factor(
-  df_plot$site_std,
-  levels = site_order
-)
+# ============================================================
+# 15. FIXED SITE-SPECIFIC Y-AXIS CONFIGURATION
+# ============================================================
 
-
-# ------------------------------------------------------------
-# 11. COLORS
-# ------------------------------------------------------------
-
-colors <- c(
-
-  "DZP" =
-    "#410257",
-
-  "PHB" =
-    "#8C7D37",
-
-  "GABA" =
-    "#C06000",
-
-  # LIN 400
-  "LIN" =
-    "#92C59A",
-
-  # NER 400
-  "NER" =
-    "#386486"
+site_y_config <- list(
+  "Benzodiazepine site" = list(
+    lower = -10,
+    upper = 0,
+    breaks = seq(-10, 0, by = 2)
+  ),
+  "Barbiturate site" = list(
+    lower = -8,
+    upper = 0,
+    breaks = seq(-8, 0, by = 2)
+  ),
+  "GABA orthosteric site" = list(
+    lower = -10,
+    upper = 55,
+    breaks = c(-10, 0, 10, 20, 30, 40, 50, 55)
+  )
 )
 
 
-# ------------------------------------------------------------
-# 12. COMPOUNDS PRESENT
-# ------------------------------------------------------------
-
-compounds_present <- compound_order[
-  compound_order %in%
-    unique(
-      as.character(
-        df_plot$compound_std
-      )
-    )
-]
-
-
-# ------------------------------------------------------------
-# 13. SITE POSITIONS
-# ------------------------------------------------------------
-
-site_position <- c(
-
-  "Benzodiazepine site" = 3,
-
-  "Barbiturate site" = 2,
-
-  "GABA orthosteric site" = 1
-)
-
-
-# ------------------------------------------------------------
-# 14. VISUAL DIMENSIONS
-# ------------------------------------------------------------
-
-DOT_BAND_HEIGHT <- 0.130
-DOT_JITTER_HEIGHT <- DOT_BAND_HEIGHT / 2
-
-BOX_HEIGHT <- 0.080
-BOX_HALF_HEIGHT <- BOX_HEIGHT / 2
-
-
-# ------------------------------------------------------------
-# 15. VERTICAL ORGANIZATION
-# ------------------------------------------------------------
-
-CLOUD_VERTICAL_POSITION <-  0.300
-
-DOT_VERTICAL_POSITION   <- -0.020
-
-BOX_VERTICAL_POSITION   <- -0.300
-
-
-# ------------------------------------------------------------
-# 16. POSITIVE VALUES
-# ------------------------------------------------------------
-
-POSITIVE_CATEGORY_X <- 0.25
-
-POSITIVE_SLOT_MIN <- 0.17
-POSITIVE_SLOT_MAX <- 0.33
-
-POSITIVE_BACKGROUND_MIN <- 0.15
-POSITIVE_BACKGROUND_MAX <- 0.35
-
-
-# ------------------------------------------------------------
-# 17. SPLIT <= 0 AND > 0
-# ------------------------------------------------------------
-
-df_numeric <- df_plot %>%
-
-  filter(
-    affinity <= 0
-  ) %>%
-
-  mutate(
-
-    x_plot =
-      pmax(
-        affinity,
-        -10
-      )
-  )
-
-
-df_positive <- df_plot %>%
-
-  filter(
-    affinity > 0
-  ) %>%
-
-  group_by(
-    site_std,
-    compound_std
-  ) %>%
-
-  mutate(
-
-    x_plot =
-
-      if (n() == 1) {
-
-        POSITIVE_CATEGORY_X
-
-      } else {
-
-        seq(
-          POSITIVE_SLOT_MIN,
-          POSITIVE_SLOT_MAX,
-          length.out = n()
-        )
-      }
-  ) %>%
-
-  ungroup()
-
-
-df_all <- bind_rows(
-  df_numeric,
-  df_positive
-)
-
-
-# ------------------------------------------------------------
-# 18. COMPOUND OFFSETS
-# ------------------------------------------------------------
-
-cloud_offset <- c(
-
-  "DZP"   =  0.100,
-  "PHB"   =  0.050,
-  "GABA"  =  0.000,
-  "LIN"   = -0.050,
-  "NER" = -0.100
-)
-
-
-box_offset <- c(
-
-  "DZP"   =  0.070,
-  "PHB"   =  0.035,
-  "GABA"  =  0.000,
-  "LIN"   = -0.035,
-  "NER" = -0.070
-)
-
-
-# ------------------------------------------------------------
-# 19. Y POSITIONS
-# ------------------------------------------------------------
-
-df_all <- df_all %>%
-
-  mutate(
-
-    site_base =
-      unname(
-        site_position[
-          as.character(site_std)
-        ]
-      ),
-
-    y_dot =
-      site_base +
-      DOT_VERTICAL_POSITION
-  )
-
-
-df_numeric <- df_numeric %>%
-
-  mutate(
-
-    site_base =
-      unname(
-        site_position[
-          as.character(site_std)
-        ]
-      )
-  )
-
-
-df_positive <- df_positive %>%
-
-  mutate(
-
-    site_base =
-      unname(
-        site_position[
-          as.character(site_std)
-        ]
-      )
-  )
-
-
-# ------------------------------------------------------------
-# 20. BOXPLOT STATISTICS
-# ------------------------------------------------------------
-
-calculate_box_stats <- function(data) {
-
-  if (nrow(data) == 0) {
-    return(data.frame())
-  }
-
-
-  base_stats <- data %>%
-
-    group_by(
-      site_std,
-      compound_std
-    ) %>%
-
-    summarise(
-
-      q1 =
-        quantile(
-          x_plot,
-          0.25,
-          na.rm = TRUE
-        ),
-
-      median =
-        median(
-          x_plot,
-          na.rm = TRUE
-        ),
-
-      q3 =
-        quantile(
-          x_plot,
-          0.75,
-          na.rm = TRUE
-        ),
-
-      iqr =
-        IQR(
-          x_plot,
-          na.rm = TRUE
-        ),
-
-      .groups =
-        "drop"
-    ) %>%
-
-    mutate(
-
-      lower_limit =
-        q1 - 1.5 * iqr,
-
-      upper_limit =
-        q3 + 1.5 * iqr
-    )
-
-
-  whiskers <- data %>%
-
-    inner_join(
-
-      base_stats %>%
-
-        select(
-          site_std,
-          compound_std,
-          lower_limit,
-          upper_limit
-        ),
-
-      by =
-        c(
-          "site_std",
-          "compound_std"
-        )
-    ) %>%
-
-    group_by(
-      site_std,
-      compound_std
-    ) %>%
-
-    summarise(
-
-      whisker_low =
-        min(
-          x_plot[
-            x_plot >= lower_limit
-          ],
-          na.rm = TRUE
-        ),
-
-      whisker_high =
-        max(
-          x_plot[
-            x_plot <= upper_limit
-          ],
-          na.rm = TRUE
-        ),
-
-      .groups =
-        "drop"
-    )
-
-
-  base_stats %>%
-
-    left_join(
-
-      whiskers,
-
-      by =
-        c(
-          "site_std",
-          "compound_std"
-        )
-    )
-}
-
-
-# ------------------------------------------------------------
-# 21. CALCULATE BOXPLOTS
-# ------------------------------------------------------------
-
-box_numeric <-
-  calculate_box_stats(
-    df_numeric
-  )
-
-box_positive <-
-  calculate_box_stats(
-    df_positive
-  )
-
-
-box_stats <- bind_rows(
-  box_numeric,
-  box_positive
-) %>%
-
-  mutate(
-
-    site_base =
-      unname(
-        site_position[
-          as.character(site_std)
-        ]
-      ),
-
-    y_box =
-      site_base +
-      BOX_VERTICAL_POSITION +
-      unname(
-        box_offset[
-          as.character(compound_std)
-        ]
-      ),
-
-    ymin =
-      y_box -
-      BOX_HALF_HEIGHT,
-
-    ymax =
-      y_box +
-      BOX_HALF_HEIGHT,
-
-    cap_ymin =
-      y_box -
-      BOX_HALF_HEIGHT * 0.60,
-
-    cap_ymax =
-      y_box +
-      BOX_HALF_HEIGHT * 0.60
-  )
-
-
-# ------------------------------------------------------------
-# 22. DENSITY FUNCTION
-# ------------------------------------------------------------
-
-calculate_density_polygon <- function(
-  x,
-  baseline,
-  site_name,
-  compound_name,
-  lower_bound,
-  upper_bound,
-  margin,
-  adjust = 1.20,
-  height_scale = 0.25,
-  tail_fraction = 0.08
+# ============================================================
+# 16. HALF-CLOUD FUNCTION
+#
+# IMPORTANT:
+# The cloud polygon is built ONLY from the natural KDE support.
+# It is never extended to the Y-axis limits. This prevents long
+# degenerate polygon edges that can become triangular artifacts
+# when the rightmost cloud is clipped by the plotting panel.
+# ============================================================
+
+calculate_half_cloud <- function(
+    values,
+    x_center,
+    compound_name
 ) {
-
-  x <- x[
-    is.finite(x)
-  ]
-
-
-  if (length(x) < 2) {
+  values <- values[is.finite(values)]
+  
+  if (length(values) < 2) {
     return(NULL)
   }
-
-
-  if (
-    length(
-      unique(
-        round(x, 5)
-      )
-    ) == 1
-  ) {
-
-    x <- c(
-      x,
-      x + 0.000001
+  
+  if (length(unique(round(values, 8))) == 1) {
+    values <- c(
+      values,
+      values[1] + 0.000001
     )
   }
-
-
-  x_min <- max(
-    lower_bound,
-    min(x) - margin
-  )
-
-
-  x_max <- min(
-    upper_bound,
-    max(x) + margin
-  )
-
-
-  if (x_max <= x_min) {
-    return(NULL)
-  }
-
-
+  
   density_result <- density(
-
-    x = x,
-
-    from = x_min,
-
-    to = x_max,
-
-    n = 512,
-
-    adjust = adjust
+    x = values,
+    n = 2048,
+    adjust = DENSITY_ADJUST,
+    cut = 3,
+    na.rm = TRUE
   )
-
-
-  density_values <-
-    density_result$y
-
-
-  threshold <-
-    max(
-      density_values
-    ) *
-    tail_fraction
-
-
-  valid_index <-
-    which(
-      density_values >
-        threshold
-    )
-
-
+  
+  density_values <- density_result$y
+  
   if (
-    length(valid_index) < 5
+    length(density_values) == 0 ||
+    !all(is.finite(density_values)) ||
+    max(density_values) <= 0
   ) {
     return(NULL)
   }
-
-
-  first_index <-
-    min(valid_index)
-
-  last_index <-
-    max(valid_index)
-
-
-  x_trimmed <-
-    density_result$x[
-      first_index:last_index
-    ]
-
-
-  density_trimmed <-
-    density_values[
-      first_index:last_index
-    ]
-
-
-  y_trimmed <-
-
-    baseline +
-
-    (
-      density_trimmed /
-        max(density_trimmed)
-    ) *
-
-    height_scale
-
-
+  
+  threshold <- max(density_values) * DENSITY_TAIL_FRACTION
+  
+  valid_index <- which(density_values >= threshold)
+  
+  if (length(valid_index) < 5) {
+    valid_index <- seq_along(density_values)
+  }
+  
+  first_index <- min(valid_index)
+  last_index  <- max(valid_index)
+  
+  y_density <- density_result$x[first_index:last_index]
+  d_density <- density_values[first_index:last_index]
+  
+  d_scaled <- d_density / max(d_density)
+  
+  if (length(y_density) >= 2) {
+    y_step <- median(diff(y_density))
+    
+    if (!is.finite(y_step) || y_step <= 0) {
+      y_step <- max(diff(range(values)) / 1000, 0.000001)
+    }
+  } else {
+    y_step <- 0.000001
+  }
+  
+  taper_n <- CLOUD_TAPER_POINTS
+  
+  left_y <- seq(
+    y_density[1] - taper_n * y_step,
+    y_density[1] - y_step,
+    length.out = taper_n
+  )
+  left_d <- seq(
+    0,
+    d_scaled[1],
+    length.out = taper_n + 1
+  )[-(taper_n + 1)]
+  
+  right_y <- seq(
+    y_density[length(y_density)] + y_step,
+    y_density[length(y_density)] + taper_n * y_step,
+    length.out = taper_n
+  )
+  right_d <- seq(
+    d_scaled[length(d_scaled)],
+    0,
+    length.out = taper_n + 1
+  )[-1]
+  
+  y_density <- c(
+    left_y,
+    y_density,
+    right_y
+  )
+  
+  d_scaled <- c(
+    left_d,
+    d_scaled,
+    right_d
+  )
+  
+  # Do not append the plot limits to the cloud geometry.
+  # The taper above already returns the KDE smoothly to zero at
+  # its natural ends. Fixed Y-axis limits are applied only at the
+  # coordinate stage later in the plot.
+  
+  baseline <- x_center + CLOUD_BASE_OFFSET
+  x_outer  <- baseline + d_scaled * CLOUD_WIDTH
+  
   data.frame(
+    x = c(
+      x_outer,
+      rev(rep(baseline, length(y_density)))
+    ),
+    y = c(
+      y_density,
+      rev(y_density)
+    ),
+    compound_std = compound_name
+  )
+}
 
-    x =
-      c(
-        x_trimmed,
-        rev(x_trimmed)
-      ),
 
-    y =
-      c(
-        y_trimmed,
-        rep(
-          baseline,
-          length(x_trimmed)
-        )
-      ),
+# ============================================================
+# 17. CREATE ONE GRAPH PER SITE
+# ============================================================
 
-    site_std =
+create_site_plot <- function(site_name) {
+  
+  site_data <- df_plot %>%
+    filter(site_std == site_name)
+  
+  if (nrow(site_data) == 0) {
+    cat(
+      "\nNo data found for:",
       site_name,
-
-    compound_std =
-      compound_name
-  )
-}
-
-
-# ------------------------------------------------------------
-# 23. NEGATIVE / ZERO DENSITY CLOUDS
-# ------------------------------------------------------------
-
-numeric_polygons <- list()
-
-counter <- 1
-
-
-for (s in site_order) {
-
-  for (c in compound_order) {
-
-
-    current_data <- df_numeric %>%
-
-      filter(
-
-        as.character(site_std) ==
-          s,
-
-        as.character(compound_std) ==
-          c
-      )
-
-
-    if (
-      nrow(current_data) < 2
-    ) {
-      next
-    }
-
-
-    baseline <-
-
-      site_position[[s]] +
-
-      CLOUD_VERTICAL_POSITION +
-
-      cloud_offset[[c]]
-
-
-    result <-
-      calculate_density_polygon(
-
-        x =
-          current_data$x_plot,
-
-        baseline =
-          baseline,
-
-        site_name =
-          s,
-
-        compound_name =
-          c,
-
-        lower_bound =
-          -10,
-
-        upper_bound =
-          0,
-
-        margin =
-          0.35,
-
-        adjust =
-          1.20,
-
-        height_scale =
-          0.25,
-
-        tail_fraction =
-          0.08
-      )
-
-
-    if (!is.null(result)) {
-
-      numeric_polygons[[
-        counter
-      ]] <- result
-
-      counter <-
-        counter + 1
-    }
+      "\n"
+    )
+    return(NULL)
   }
-}
-
-
-if (length(numeric_polygons) > 0) {
-
-  density_numeric <-
-    bind_rows(
-      numeric_polygons
-    )
-
-} else {
-
-  density_numeric <-
-    data.frame(
-      x = numeric(0),
-      y = numeric(0),
-      site_std = character(0),
-      compound_std = character(0)
-    )
-}
-
-
-# ------------------------------------------------------------
-# 24. POSITIVE DENSITY CLOUDS
-# ------------------------------------------------------------
-
-positive_polygons <- list()
-
-counter <- 1
-
-
-for (s in site_order) {
-
-  for (c in compound_order) {
-
-
-    current_data <- df_positive %>%
-
-      filter(
-
-        as.character(site_std) ==
-          s,
-
-        as.character(compound_std) ==
-          c
-      )
-
-
-    if (
-      nrow(current_data) < 2
-    ) {
-      next
-    }
-
-
-    baseline <-
-
-      site_position[[s]] +
-
-      CLOUD_VERTICAL_POSITION +
-
-      cloud_offset[[c]]
-
-
-    result <-
-      calculate_density_polygon(
-
-        x =
-          current_data$x_plot,
-
-        baseline =
-          baseline,
-
-        site_name =
-          s,
-
-        compound_name =
-          c,
-
-        lower_bound =
-          POSITIVE_BACKGROUND_MIN,
-
-        upper_bound =
-          POSITIVE_BACKGROUND_MAX,
-
-        margin =
-          0.025,
-
-        adjust =
-          1.10,
-
-        height_scale =
-          0.25,
-
-        tail_fraction =
-          0.05
-      )
-
-
-    if (!is.null(result)) {
-
-      positive_polygons[[
-        counter
-      ]] <- result
-
-      counter <-
-        counter + 1
-    }
+  
+  compounds_present <-
+    compound_order[
+      compound_order %in% unique(site_data$compound_std)
+    ]
+  
+  if (length(compounds_present) == 0) {
+    return(NULL)
   }
-}
-
-
-if (length(positive_polygons) > 0) {
-
-  density_positive <-
-    bind_rows(
-      positive_polygons
-    )
-
-} else {
-
-  density_positive <-
-    data.frame(
-      x = numeric(0),
-      y = numeric(0),
-      site_std = character(0),
-      compound_std = character(0)
-    )
-}
-
-
-density_polygon <-
-  bind_rows(
-    density_numeric,
-    density_positive
+  
+  number_compounds <- length(compounds_present)
+  
+  x_positions <- setNames(
+    1 + (seq_len(number_compounds) - 1) * COMPOUND_SPACING,
+    compounds_present
   )
-
-
-# ------------------------------------------------------------
-# 25. SITE LABELS
-# ------------------------------------------------------------
-
-site_labels <- expression(
-
-  bold(
-    alpha[1] /
-      gamma[2] ~
-      "interface"
-  ),
-
-  bold(
-    alpha[1] /
-      beta[2] ~
-      "interface"
-  ),
-
-  bold(
-    beta[2] /
-      alpha[1] ~
-      "interface"
-  )
-)
-
-
-# ------------------------------------------------------------
-# 26. LEGEND DATA
-# ------------------------------------------------------------
-
-legend_df <- data.frame(
-
-  compound_std =
-    factor(
-      compounds_present,
-      levels =
-        compound_order
-    ),
-
-  x =
-    rep(
-      -9.3,
-      length(compounds_present)
-    ),
-
-  y =
-    rep(
-      10,
-      length(compounds_present)
-    )
-)
-
-
-# ------------------------------------------------------------
-# 27. BUILD PLOT
-# ------------------------------------------------------------
-
-p <- ggplot() +
-
-
-  # ==========================================================
-  # BINDING-SITE DISTINCTION
-  #
-  # BLACK
-  # 90% TRANSPARENT
-  #
-  # alpha = 0.10 means:
-  #   10% opacity
-  #   90% transparency
-  #
-  # This allows the poster background to remain visible.
-  # ==========================================================
-
-  annotate(
-
-    "rect",
-
-    xmin =
-      -Inf,
-
-    xmax =
-      Inf,
-
-    ymin =
-      1.52,
-
-    ymax =
-      2.48,
-
-    fill =
-      "black",
-
-    alpha =
-      0.10
-  ) +
-
-
-  # ----------------------------------------------------------
-  # POSITIVE-VALUE REGION
-  # ----------------------------------------------------------
-
-  annotate(
-
-    "rect",
-
-    xmin =
-      POSITIVE_BACKGROUND_MIN,
-
-    xmax =
-      POSITIVE_BACKGROUND_MAX,
-
-    ymin =
-      -Inf,
-
-    ymax =
-      Inf,
-
-    fill =
-      "#CFCFCF",
-
-    alpha =
-      0.20
-  ) +
-
-
-  geom_vline(
-
-    xintercept =
-      POSITIVE_BACKGROUND_MIN,
-
-    linetype =
-      "dashed",
-
-    linewidth =
-      0.35,
-
-    color =
-      "grey55"
-  ) +
-
-
-  # ==========================================================
-  # CLOUDS
-  # ==========================================================
-
-  geom_polygon(
-
-    data =
-      density_polygon,
-
-    aes(
-
-      x =
-        x,
-
-      y =
-        y,
-
-      group =
-        interaction(
-          site_std,
-          compound_std
-        ),
-
-      fill =
+  
+  site_data <- site_data %>%
+    filter(compound_std %in% compounds_present) %>%
+    mutate(
+      compound_std = factor(
         compound_std,
-
-      color =
-        compound_std
-    ),
-
-    alpha =
-      0.24,
-
-    linewidth =
-      0.62,
-
-    show.legend =
-      FALSE
-  ) +
-
-
-  # ==========================================================
+        levels = compounds_present
+      ),
+      x_center = unname(
+        x_positions[as.character(compound_std)]
+      ),
+      x_observation_center =
+        x_center - OBS_CENTER_OFFSET
+    )
+  
+  
+  # ----------------------------------------------------------
+  # FIXED Y AXIS FOR EACH SITE
+  # ----------------------------------------------------------
+  
+  y_cfg <- site_y_config[[site_name]]
+  
+  y_lower  <- y_cfg$lower
+  y_upper  <- y_cfg$upper
+  y_breaks <- y_cfg$breaks
+  
+  
+  # ----------------------------------------------------------
   # INDIVIDUAL OBSERVATIONS
-  # ==========================================================
-
-  geom_jitter(
-
-    data =
-      df_all,
-
-    aes(
-
-      x =
-        x_plot,
-
-      y =
-        y_dot,
-
-      color =
-        compound_std
-    ),
-
-    height =
-      DOT_JITTER_HEIGHT,
-
-    width =
-      0,
-
-    size =
-      1.70,
-
-    alpha =
-      0.52,
-
-    show.legend =
-      FALSE
-  ) +
-
-
-  # ==========================================================
-  # BOXPLOT WHISKERS
-  # ==========================================================
-
-  geom_segment(
-
-    data =
-      box_stats,
-
-    aes(
-      x =
-        whisker_low,
-      xend =
-        q1,
-      y =
-        y_box,
-      yend =
-        y_box,
-      color =
-        compound_std
-    ),
-
-    linewidth =
-      0.34,
-
-    show.legend =
-      FALSE
-  ) +
-
-
-  geom_segment(
-
-    data =
-      box_stats,
-
-    aes(
-      x =
-        q3,
-      xend =
-        whisker_high,
-      y =
-        y_box,
-      yend =
-        y_box,
-      color =
-        compound_std
-    ),
-
-    linewidth =
-      0.34,
-
-    show.legend =
-      FALSE
-  ) +
-
-
-  # ==========================================================
-  # WHISKER CAPS
-  # ==========================================================
-
-  geom_segment(
-
-    data =
-      box_stats,
-
-    aes(
-      x =
-        whisker_low,
-      xend =
-        whisker_low,
-      y =
-        cap_ymin,
-      yend =
-        cap_ymax,
-      color =
-        compound_std
-    ),
-
-    linewidth =
-      0.34,
-
-    show.legend =
-      FALSE
-  ) +
-
-
-  geom_segment(
-
-    data =
-      box_stats,
-
-    aes(
-      x =
-        whisker_high,
-      xend =
-        whisker_high,
-      y =
-        cap_ymin,
-      yend =
-        cap_ymax,
-      color =
-        compound_std
-    ),
-
-    linewidth =
-      0.34,
-
-    show.legend =
-      FALSE
-  ) +
-
-
-  # ==========================================================
-  # BOXES
-  # ==========================================================
-
-  geom_rect(
-
-    data =
-      box_stats,
-
-    aes(
-
-      xmin =
-        q1,
-
-      xmax =
-        q3,
-
-      ymin =
-        ymin,
-
-      ymax =
-        ymax,
-
-      fill =
-        compound_std,
-
-      color =
-        compound_std
-    ),
-
-    alpha =
-      0.24,
-
-    linewidth =
-      0.34,
-
-    show.legend =
-      FALSE
-  ) +
-
-
   # ----------------------------------------------------------
-  # MEDIAN
+  
+  dot_data <- site_data %>%
+    group_by(compound_std) %>%
+    mutate(
+      x_dot =
+        x_observation_center +
+        runif(
+          n(),
+          min = -OBS_BAND_WIDTH / 2,
+          max =  OBS_BAND_WIDTH / 2
+        )
+    ) %>%
+    ungroup()
+  
+  
   # ----------------------------------------------------------
-
-  geom_segment(
-
-    data =
-      box_stats,
-
-    aes(
-      x =
-        median,
-      xend =
-        median,
-      y =
-        ymin,
-      yend =
-        ymax,
-      color =
-        compound_std
-    ),
-
-    linewidth =
-      0.45,
-
-    show.legend =
-      FALSE
-  ) +
-
-
+  # CLOUDS
   # ----------------------------------------------------------
-  # LEGEND-ONLY LAYER
-  # ----------------------------------------------------------
-
-  geom_point(
-
-    data =
-      legend_df,
-
-    aes(
-      x =
-        x,
-      y =
-        y,
-      fill =
-        compound_std,
-      color =
-        compound_std
-    ),
-
-    shape =
-      22,
-
-    size =
-      4.5,
-
-    stroke =
-      0.9,
-
-    inherit.aes =
-      FALSE,
-
-    show.legend =
-      TRUE
-  ) +
-
-
-  # ----------------------------------------------------------
-  # COLORS
-  # ----------------------------------------------------------
-
-  scale_fill_manual(
-
-    values =
-      colors,
-
-    breaks =
-      compounds_present,
-
-    drop =
-      TRUE,
-
-    name =
-      "Compounds"
-  ) +
-
-
-  scale_color_manual(
-
-    values =
-      colors,
-
-    breaks =
-      compounds_present,
-
-    drop =
-      TRUE,
-
-    name =
-      "Compounds"
-  ) +
-
-
-  # ----------------------------------------------------------
-  # LEGEND
-  # ----------------------------------------------------------
-
-  guides(
-
-    color =
-      "none",
-
-    fill =
-      guide_legend(
-
-        title =
-          "Compounds",
-
-        nrow =
-          1,
-
-        byrow =
-          TRUE,
-
-        title.position =
-          "left",
-
-        override.aes =
-          list(
-
-            shape =
-              22,
-
-            size =
-              5,
-
-            stroke =
-              0.9,
-
-            color =
-              unname(
-                colors[
-                  compounds_present
-                ]
-              ),
-
-            fill =
-              grDevices::adjustcolor(
-
-                unname(
-                  colors[
-                    compounds_present
-                  ]
-                ),
-
-                alpha.f =
-                  0.24
-              )
-          )
+  
+  cloud_list <- list()
+  
+  for (current_compound in compounds_present) {
+    
+    current_data <- site_data %>%
+      filter(
+        as.character(compound_std) == current_compound
       )
-  ) +
-
-
+    
+    current_x <- unname(
+      x_positions[[current_compound]]
+    )
+    
+    current_cloud <- calculate_half_cloud(
+      values = current_data$affinity,
+      x_center = current_x,
+      compound_name = current_compound
+    )
+    
+    if (!is.null(current_cloud)) {
+      cloud_list[[length(cloud_list) + 1]] <-
+        current_cloud
+    }
+  }
+  
+  if (length(cloud_list) > 0) {
+    cloud_data <- bind_rows(cloud_list) %>%
+      mutate(
+        compound_std = factor(
+          compound_std,
+          levels = compounds_present
+        )
+      )
+  } else {
+    cloud_data <- data.frame(
+      x = numeric(0),
+      y = numeric(0),
+      compound_std = factor(
+        character(0),
+        levels = compounds_present
+      )
+    )
+  }
+  
+  
   # ----------------------------------------------------------
   # X AXIS
   # ----------------------------------------------------------
-
-  scale_x_reverse(
-
-    limits =
-      c(
-        0.36,
-        -9.6
-      ),
-
-    breaks =
-      c(
-        POSITIVE_CATEGORY_X,
-        0,
-        -2,
-        -4,
-        -6,
-        -8
-      ),
-
-    labels =
-      c(
-        ">0",
-        "0",
-        "-2",
-        "-4",
-        "-6",
-        "-8"
-      ),
-
-    expand =
-      c(
-        0,
-        0
+  
+  x_breaks <- unname(x_positions)
+  x_labels <- compounds_present
+  
+  # Use asymmetric panel padding. The right padding must be
+  # larger than CLOUD_BASE_OFFSET + CLOUD_WIDTH so the rightmost
+  # cloud (NER in these panels) is never clipped horizontally.
+  x_left_padding <- max(
+    0.40,
+    OBS_CENTER_OFFSET + OBS_BAND_WIDTH / 2 + 0.08
+  )
+  
+  x_right_padding <-
+    CLOUD_BASE_OFFSET +
+    CLOUD_WIDTH +
+    0.08
+  
+  x_min_plot <- min(x_breaks) - x_left_padding
+  x_max_plot <- max(x_breaks) + x_right_padding
+  
+  
+  # ----------------------------------------------------------
+  # BUILD GRAPH
+  # ----------------------------------------------------------
+  
+  p <- ggplot()
+  
+  if (y_lower <= 0 && y_upper >= 0) {
+    p <- p +
+      geom_hline(
+        yintercept = 0,
+        color = "black",
+        linewidth = 0.40,
+        alpha = 0.55
       )
-  ) +
-
-
-  # ----------------------------------------------------------
-  # Y AXIS
-  # ----------------------------------------------------------
-
-  scale_y_continuous(
-
-    breaks =
-      c(
-        3,
-        2,
-        1
+  }
+  
+  p <- p +
+    geom_polygon(
+      data = cloud_data,
+      aes(
+        x = x,
+        y = y,
+        group = compound_std,
+        fill = compound_std
       ),
-
-    labels =
-      site_labels,
-
-    expand =
-      c(
-        0.01,
-        0.01
-      )
-  ) +
-
-
-  # ----------------------------------------------------------
-  # LABELS
-  # ----------------------------------------------------------
-
-  labs(
-
-    x =
-      "Binding affinity (kcal/mol)",
-
-    y =
-      NULL,
-
-    title =
-      "Experiment 1"
-  ) +
-
-
-  coord_cartesian(
-
-    ylim =
-      c(
-        0.35,
-        3.75
+      alpha = CLOUD_ALPHA,
+      color = NA,
+      linewidth = 0,
+      show.legend = FALSE
+    ) +
+    
+    geom_point(
+      data = dot_data,
+      aes(
+        x = x_dot,
+        y = affinity,
+        color = compound_std
       ),
-
-    clip =
-      "off"
-  ) +
-
-
-  # ----------------------------------------------------------
-  # THEME
-  # ----------------------------------------------------------
-
-  theme_minimal(
-    base_size =
-      11
-  ) +
-
-
-  theme(
-
-    # --------------------------------------------------------
-    # TRANSPARENT BACKGROUND
-    # --------------------------------------------------------
-
-    panel.background =
-      element_rect(
-        fill =
-          "transparent",
-        color =
-          NA
+      size = DOT_SIZE,
+      alpha = DOT_ALPHA,
+      show.legend = FALSE
+    ) +
+    
+    geom_boxplot(
+      data = site_data,
+      aes(
+        x = x_observation_center,
+        y = affinity,
+        group = compound_std,
+        fill = compound_std
       ),
-
-    plot.background =
-      element_rect(
-        fill =
-          "transparent",
-        color =
-          NA
+      width = OBS_BAND_WIDTH,
+      alpha = BOX_ALPHA,
+      color = "black",
+      linewidth = BOX_LINEWIDTH,
+      outlier.shape = NA,
+      show.legend = FALSE
+    ) +
+    
+    scale_fill_manual(
+      values = colors,
+      breaks = compounds_present,
+      drop = TRUE
+    ) +
+    
+    scale_color_manual(
+      values = colors,
+      breaks = compounds_present,
+      drop = TRUE
+    ) +
+    
+    scale_x_continuous(
+      breaks = x_breaks,
+      labels = x_labels,
+      limits = c(
+        x_min_plot,
+        x_max_plot
       ),
-
-    legend.background =
-      element_rect(
-        fill =
-          "transparent",
-        color =
-          NA
+      expand = c(0, 0)
+    ) +
+    
+    scale_y_reverse(
+      breaks = y_breaks,
+      labels = y_breaks,
+      expand = c(0, 0)
+    ) +
+    
+    coord_cartesian(
+      ylim = c(y_lower, y_upper),
+      clip = "on"
+    ) +
+    
+    labs(
+      x = NULL,
+      y = "Binding affinity (kcal/mol)",
+      title = site_titles[[site_name]]
+    ) +
+    
+    theme_minimal(
+      base_size = 12,
+      base_family = FONT_FAMILY
+    ) +
+    
+    theme(
+      panel.background = element_rect(
+        fill = "transparent",
+        color = NA
       ),
-
-    legend.box.background =
-      element_rect(
-        fill =
-          "transparent",
-        color =
-          NA
+      
+      plot.background = element_rect(
+        fill = "transparent",
+        color = NA
       ),
-
-    legend.key =
-      element_rect(
-        fill =
-          "transparent",
-        color =
-          NA
+      
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_blank(),
+      
+      panel.grid.major.y = element_line(
+        color = "grey82",
+        linewidth = 0.38
       ),
-
-
-    # --------------------------------------------------------
-    # GRID
-    # --------------------------------------------------------
-
-    panel.grid.major.y =
-      element_blank(),
-
-    panel.grid.minor =
-      element_blank(),
-
-    panel.grid.major.x =
-      element_line(
-        color =
-          "grey78",
-        linewidth =
-          0.42
+      
+      axis.line.x = element_line(
+        color = "black",
+        linewidth = 0.65
       ),
-
-
-    # --------------------------------------------------------
-    # X AXIS
-    # --------------------------------------------------------
-
-    axis.line.x =
-      element_line(
-        color =
-          "black",
-        linewidth =
-          0.65
+      
+      axis.line.y = element_line(
+        color = "black",
+        linewidth = 0.65
       ),
-
-    axis.ticks.x =
-      element_line(
-        color =
-          "black",
-        linewidth =
-          0.55
+      
+      axis.ticks = element_line(
+        color = "black",
+        linewidth = 0.50
       ),
-
-    axis.ticks.length.x =
-      grid::unit(
-        0.14,
+      
+      axis.ticks.length = grid::unit(
+        0.12,
         "cm"
       ),
-
-    axis.ticks.y =
-      element_blank(),
-
-
-    # --------------------------------------------------------
-    # LEGEND
-    # --------------------------------------------------------
-
-    legend.position =
-      "top",
-
-    legend.justification =
-      "left",
-
-    legend.box.just =
-      "left",
-
-    legend.direction =
-      "horizontal",
-
-    legend.title =
-      element_text(
-        size =
-          11.5,
-        face =
-          "bold",
-        color =
-          "black",
-        margin =
-          margin(
-            r = 6
-          )
+      
+      axis.text.x = element_text(
+        size = 13.5,
+        face = "plain",
+        color = "black",
+        margin = margin(t = 5)
       ),
-
-    legend.text =
-      element_text(
-        size =
-          10.8,
-        color =
-          "black"
+      
+      axis.text.y = element_text(
+        size = 13,
+        face = "plain",
+        color = "black",
+        margin = margin(r = 4)
       ),
-
-    legend.spacing.x =
-      grid::unit(
-        0.10,
-        "cm"
+      
+      axis.title.y = element_text(
+        size = 15,
+        face = "plain",
+        color = "black",
+        margin = margin(r = 9)
       ),
-
-    legend.key.width =
-      grid::unit(
-        0.38,
-        "cm"
+      
+      plot.title.position = "plot",
+      
+      plot.title = element_text(
+        size = 16.5,
+        face = "plain",
+        hjust = 0,
+        color = "black",
+        margin = margin(b = 8)
       ),
-
-    legend.key.height =
-      grid::unit(
-        0.42,
-        "cm"
-      ),
-
-
-    # --------------------------------------------------------
-    # TITLE
-    # --------------------------------------------------------
-
-    plot.title.position =
-      "plot",
-
-    plot.title =
-      element_text(
-        size =
-          17,
-        face =
-          "italic",
-        hjust =
-          0,
-        color =
-          "black",
-        margin =
-          margin(
-            b = 6
-          )
-      ),
-
-
-    # --------------------------------------------------------
-    # X AXIS TITLE
-    # --------------------------------------------------------
-
-    axis.title.x =
-      element_text(
-        size =
-          17.5,
-        face =
-          "bold",
-        color =
-          "black",
-        margin =
-          margin(
-            t = 9
-          )
-      ),
-
-    axis.text.x =
-      element_text(
-        size =
-          13.5,
-        face =
-          "bold",
-        color =
-          "black",
-        margin =
-          margin(
-            t = 3
-          )
-      ),
-
-
-    # --------------------------------------------------------
-    # BINDING SITE LABELS
-    # --------------------------------------------------------
-
-    axis.text.y =
-      element_text(
-        size =
-          12.8,
-        face =
-          "bold",
-        color =
-          "black",
-        margin =
-          margin(
-            r = 7
-          )
-      ),
-
-
-    # --------------------------------------------------------
-    # MARGINS
-    # --------------------------------------------------------
-
-    plot.margin =
-      margin(
+      
+      legend.position = "none",
+      
+      plot.margin = margin(
         t = 4,
-        r = 4,
+        r = 5,
         b = 4,
         l = 4
       )
+    )
+  
+  
+  # ----------------------------------------------------------
+  # SAVE
+  # ----------------------------------------------------------
+  
+  output_file <- file.path(
+    output_dir,
+    site_file_names[[site_name]]
   )
-
-
-# ------------------------------------------------------------
-# 28. DISPLAY
-# ------------------------------------------------------------
-
-print(p)
-
-
-# ------------------------------------------------------------
-# 29. EXPORT TRANSPARENT PNG
-# ------------------------------------------------------------
-
-output_file <- file.path(
-  output_dir,
-  "raincloud_LIN_NER_all_binding_sites_poster.png"
-)
-
-
-ggsave(
-
-  filename =
+  
+  ggsave(
+    filename = output_file,
+    plot = p,
+    width = FIG_WIDTH,
+    height = FIG_HEIGHT,
+    units = "in",
+    dpi = FIG_DPI,
+    bg = "transparent"
+  )
+  
+  cat(
+    "\nSaved:",
     output_file,
-
-  plot =
-    p,
-
-  width =
-    10.5,
-
-  height =
-    6.0,
-
-  units =
-    "in",
-
-  dpi =
-    600,
-
-  bg =
-    "transparent"
-)
+    "\n"
+  )
+  
+  cat(
+    "Y-axis range:",
+    y_lower,
+    "to",
+    y_upper,
+    "kcal/mol\n"
+  )
+  
+  return(p)
+}
 
 
-# ------------------------------------------------------------
-# 30. SUMMARY
-# ------------------------------------------------------------
+# ============================================================
+# 18. GENERATE ALL GRAPHS
+# ============================================================
 
-cat("\n============================================\n")
-cat("RAINCLOUD PLOT COMPLETED\n")
+plots <- list()
+
+for (current_site in site_order) {
+  current_plot <- create_site_plot(
+    current_site
+  )
+  
+  if (!is.null(current_plot)) {
+    plots[[current_site]] <- current_plot
+    print(current_plot)
+  }
+}
+
+
+# ============================================================
+# 19. SUMMARY
+# ============================================================
+
+cat("\n")
+cat("============================================\n")
+cat("RAINCLOUD PLOTS COMPLETED\n")
 cat("============================================\n")
 
-cat("\nGeneral background:\n")
+cat("\nY-axis:\n")
+cat("Benzodiazepine site: 0 to -10\n")
+cat("Barbiturate site: 0 to -8, with major ticks every 2\n")
+cat("GABA orthosteric site: 55 to -10\n")
+cat("More negative values appear higher.\n")
+
+cat("\nOrganization:\n")
+cat("Points and boxplots share the same observation band on the left.\n")
+cat("Boxplots are overlaid on the individual observations.\n")
+cat("Half-density clouds are shown on the right without an outline.\n")
+cat("Clouds are smoothed, tapered to zero at their natural KDE limits, and are not extended to the Y-axis limits.\n")
+
+cat("\nMissing compounds:\n")
+cat("Missing compounds are removed automatically without leaving gaps; remaining compounds are repositioned with compact spacing.\n")
+
+cat("\nFigure dimensions:\n")
+cat(
+  FIG_WIDTH,
+  "x",
+  FIG_HEIGHT,
+  "inches\n"
+)
+
+cat("\nResolution:\n")
+cat(
+  FIG_DPI,
+  "dpi\n"
+)
+
+cat("\nBackground:\n")
 cat("Transparent\n")
 
-cat("\nBinding-site band:\n")
-cat("Black with 90% transparency\n")
-cat("alpha = 0.10\n")
+cat("\nTypography:\n")
+cat("Arial; axis labels, tick labels, and titles are not bold.\n")
 
-cat("\nClouds, points and boxplots:\n")
-cat("Original layout and alpha settings preserved; LIN/NER colors updated\n")
-
-cat("\nOutput:\n")
-cat(output_file)
-
-cat("\n\n============================================\n")
+cat("\n============================================\n")
