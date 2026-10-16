@@ -1,0 +1,153 @@
+# ============================================================
+# GABAA alpha1-beta2-gamma2
+# CODIGO 1 - LOCALIZACAO DO SITIO DE LIGACAO
+# ESTILO FLAT + SILHUETA FORTE PARA EXPORTACAO
+# ============================================================
+#
+# #1 = RECEPTOR
+# #2 = LIGANTE (usado apenas como referencia espacial)
+#
+# CADEIAS:
+# beta2  = A, C
+# alpha1 = B, D
+# gamma2 = E
+#
+# OBJETIVO:
+# - mostrar o receptor inteiro em cartoon
+# - sem exibir o ligante
+# - colorir apenas a regiao em ate 10 A do ligante
+# - estilo flat
+# - silhueta bem marcada tambem na exportacao
+# - camera e coordenadas preservadas
+# ============================================================
+
+
+# ============================================================
+# 1. CONFIGURACAO VISUAL
+# ============================================================
+
+set bgColor white
+
+# Iluminacao flat
+lighting flat
+
+# Sem sombras
+lighting shadows false
+
+# Mascara de profundidade suave
+lighting depthCue true depthCueStart 0.82 depthCueEnd 1.00 depthCueColor white
+
+# Silhueta mais forte e mais escura
+graphics silhouettes true color #505050 width 3.2 depthJump 0.01
+
+
+# ============================================================
+# 2. LIMPEZA DA CENA
+# ============================================================
+
+~contacts
+~contacts name GABAA_contacts
+
+~hbonds
+~hbonds name GABAA_hbonds
+
+label delete #1 residues
+label delete #2 atoms
+
+select clear
+
+hide #1 atoms
+hide #1 bonds
+hide #1 cartoons
+surface close #1
+
+hide #2 atoms
+hide #2 bonds
+hide #2 cartoons
+surface close #2
+
+
+# ============================================================
+# 3. PALETA DAS SUBUNIDADES
+# ============================================================
+
+# beta2 - A,C
+colordef beta2_pastel #B29DD4
+
+# alpha1 - B,D
+colordef alpha1_pastel #C3AFE2
+
+# gamma2 - E
+colordef gamma2_pastel #8A72B6
+
+
+# ============================================================
+# 4. RECEPTOR COMPLETO - BASE
+# ============================================================
+
+show #1 cartoons
+
+# Base um pouco mais escura para destacar melhor a silhueta
+color #1 #E2E2E2 target c
+
+# Opaco
+transparency #1 0 target c
+
+# Cartoon
+cartoon #1 suppressBackboneDisplay false
+cartoon style #1 width 1.8 thickness 0.30
+
+
+# ============================================================
+# 5. SELECIONAR REGIAO DE INTERESSE (10 A)
+# ============================================================
+
+select zone #2 10.0 (#1 & protein) residues true
+
+
+# ============================================================
+# 6. DESTACAR REGIAO SELECIONADA
+# ============================================================
+
+transparency sel 0 target c
+
+# beta2 - cadeias A e C
+color (sel & #1/A) beta2_pastel target c
+color (sel & #1/C) beta2_pastel target c
+
+# alpha1 - cadeias B e D
+color (sel & #1/B) alpha1_pastel target c
+color (sel & #1/D) alpha1_pastel target c
+
+# gamma2 - cadeia E
+color (sel & #1/E) gamma2_pastel target c
+
+
+# ============================================================
+# 7. ESCONDER O LIGANTE NO RESULTADO FINAL
+# ============================================================
+
+hide #2 atoms
+hide #2 bonds
+hide #2 cartoons
+surface close #2
+
+
+# ============================================================
+# 8. FINALIZACAO
+# ============================================================
+
+select clear
+
+
+# ============================================================
+# 9. EXPORTACAO
+# ============================================================
+
+# Recomendado usar supersample 1 ou 2 para nao suavizar demais a silhueta
+save "GABAA_site_localization_10A_flat.png" width 3200 supersample 1 transparentBackground false
+
+
+# ============================================================
+# FIM
+# ============================================================
