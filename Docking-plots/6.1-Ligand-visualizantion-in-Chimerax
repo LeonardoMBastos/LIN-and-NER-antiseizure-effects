@@ -1,7 +1,8 @@
+
 # ============================================================
 # GABAA alpha1-beta2-gamma2
 # INTERACOES - MODO PUBLICACAO
-# FULL + SILHUETA + LABELS EM NEGRITO
+# FULL + SILHUETA + LABELS POR CADEIA
 # ============================================================
 #
 # #1 = RECEPTOR
@@ -15,18 +16,19 @@
 # CAMERA E COORDENADAS PERMANECEM INALTERADAS
 # ============================================================
 
+
 # ============================================================
 # 1. CONFIGURACAO VISUAL
 # ============================================================
 
 set bgColor white
-
 lighting full
 lighting shadows false
 
 graphics silhouettes true
 graphics silhouettes width 1.2
 graphics silhouettes color black
+
 
 # ============================================================
 # 2. LIMPEZA DA VISUALIZACAO ANTERIOR
@@ -41,17 +43,16 @@ graphics silhouettes color black
 label delete #1 residues
 select clear
 
-# Esconder completamente o receptor
 hide #1 atoms
 hide #1 bonds
 hide #1 cartoons
 hide #1 ribbons
 surface close #1
 
-# Limpar representacoes extras do ligante
 hide #2 cartoons
 hide #2 ribbons
 surface close #2
+
 
 # ============================================================
 # 3. PALETA PADRONIZADA
@@ -66,6 +67,7 @@ colordef alpha1_pastel #D8CBEF
 # gamma2 - E
 colordef gamma2_pastel #8F7CB8
 
+
 # ============================================================
 # 4. LIGANTE - HETEROATOMOS
 # ============================================================
@@ -78,25 +80,21 @@ style #2 stick
 size #2 stickRadius 0.24
 size #2 atomRadius 0.32
 
-# Carbonos em cinza
 color #2 #666666 target ab halfbond true
-
-# Heteroatomos por elemento
 color #2 byhetero target a
 
 transparency #2 0 target ab
+
 
 # ============================================================
 # 5. SELECIONAR RESIDUOS DE INTERACAO
 # ============================================================
 
-# Seleciona residuos completos do receptor
-# ate 4.5 A do ligante
-
 select zone #2 4.5 (#1 & protein) residues true
 
+
 # ============================================================
-# 6. REPRESENTAR SOMENTE OS RESIDUOS SELECIONADOS
+# 6. REPRESENTAR SOMENTE RESIDUOS SELECIONADOS
 # ============================================================
 
 show sel atoms
@@ -107,10 +105,9 @@ style sel stick
 size sel stickRadius 0.24
 size sel atomRadius 0.32
 
-# Cor provisoria
 color sel #B0B0B0 target ab halfbond true
-
 transparency sel 0 target ab
+
 
 # ============================================================
 # 7. COLORACAO DOS RESIDUOS PELAS SUBUNIDADES
@@ -127,16 +124,31 @@ color (sel & #1/D) alpha1_pastel target a
 # gamma2 - cadeia E
 color (sel & #1/E) gamma2_pastel target a
 
+
 # ============================================================
-# 8. LABELS AUTOMATICOS - NEGRITO + OFFSET
+# 8. LABELS AUTOMATICOS POR CADEIA
 # ============================================================
 
-# Fonte: Rockwell Extra Bold
-# Altura: 0.75 Angstrom
-# Size: 128 para melhor definicao na exportacao
-# Offset: afasta os labels do residuo
+# 8.1 - Criar todos os labels com posicao padrao
 
-label sel residues text "{0.name}{0.number}" color #252525 height 0.75 size 128 font "Rockwell Extra Bold" offset 0,0,0.8 onTop true
+label sel residues text "{0.name}{0.number}" color #252525 height 0.75 size 128 font "Rockwell Extra Bold" offset 0,0,0 onTop true
+
+
+# ------------------------------------------------------------
+# 8.2 - CADEIA D
+# Deslocar para ESQUERDA e PARA BAIXO
+# ------------------------------------------------------------
+
+label (sel & #1/D) residues offset -3.0,-1.0,0
+
+
+# ------------------------------------------------------------
+# 8.3 - CADEIA E
+# Deslocar para DIREITA e PARA CIMA
+# ------------------------------------------------------------
+
+label (sel & #1/E) residues offset 1.5,1.0,0
+
 
 # ============================================================
 # 9. CONTATOS GERAIS
@@ -144,13 +156,13 @@ label sel residues text "{0.name}{0.number}" color #252525 height 0.75 size 128 
 
 contacts #2 restrict sel distanceOnly 3.8 makePseudobonds true reveal false color #98989855 radius 0.055 dashes 8 name GABAA_contacts
 
+
 # ============================================================
 # 10. LIGACOES DE HIDROGENIO
 # ============================================================
 
-# Bordo / vermelho escuro
-
 hbonds #2 restrict sel reveal false color #800020 radius 0.12 dashes 8 name GABAA_hbonds
+
 
 # ============================================================
 # 11. LIMPAR DESTAQUE DA SELECAO
@@ -158,11 +170,13 @@ hbonds #2 restrict sel reveal false color #800020 radius 0.12 dashes 8 name GABA
 
 select clear
 
+
 # ============================================================
 # 12. EXPORTACAO PARA PUBLICACAO
 # ============================================================
 
 # save "GABAA_ligante_interacoes.png" width 3200 supersample 3 transparentBackground true
+
 
 # ============================================================
 # FIM - CAMERA PRESERVADA
