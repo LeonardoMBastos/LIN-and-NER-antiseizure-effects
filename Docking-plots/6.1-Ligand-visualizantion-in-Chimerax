@@ -1,0 +1,210 @@
+
+# ============================================================
+# GABAA alpha1-beta2-gamma2
+# INTERACOES - MODO PUBLICACAO
+# ============================================================
+#
+# #1 = RECEPTOR
+# #2 = LIGANTE
+#
+# CADEIAS:
+# beta2  = A, C
+# alpha1 = B, D
+# gamma2 = E
+#
+# CAMERA E COORDENADAS PERMANECEM INALTERADAS
+# ============================================================
+
+
+# ============================================================
+# 1. CONFIGURACAO VISUAL
+# ============================================================
+
+set bgColor white
+lighting soft
+
+# Evita contornos pretos competindo com os residuos
+graphics silhouettes false
+
+
+# ============================================================
+# 2. LIMPEZA DA VISUALIZACAO ANTERIOR
+# ============================================================
+
+# Remover contatos e H-bonds antigos
+~contacts
+~contacts name GABAA_contacts
+
+~hbonds
+~hbonds name GABAA_hbonds
+
+# Remover labels anteriores do receptor
+label delete #1 residues
+
+select clear
+
+# Limpar representacoes do receptor
+hide #1 atoms
+hide #1 bonds
+hide #1 cartoons
+surface close #1
+
+# Limpar representacoes adicionais do ligante
+hide #2 cartoons
+surface close #2
+
+
+# ============================================================
+# 3. PALETA PADRONIZADA
+# ============================================================
+
+# beta2 - A,C
+colordef beta2_pastel #B8A8D9
+
+# alpha1 - B,D
+colordef alpha1_pastel #D8CBEF
+
+# gamma2 - E
+colordef gamma2_pastel #8F7CB8
+
+
+# ============================================================
+# 4. RECEPTOR AO FUNDO
+# ============================================================
+
+show #1 cartoons
+
+color #1 #C8C8C8 target c
+
+# Receptor extremamente discreto
+transparency #1 92 target c
+
+# Permitir visualizacao simultanea de cartoon e sticks
+cartoon #1 suppressBackboneDisplay false
+
+cartoon style #1 width 1.4 thickness 0.30
+
+
+# ============================================================
+# 5. LIGANTE - HETEROATOMOS
+# ============================================================
+
+show #2 atoms
+show #2 bonds
+
+style #2 stick
+
+size #2 stickRadius 0.22
+size #2 atomRadius 0.30
+
+# Primeiro, definir carbonos cinza
+color #2 #666666 target ab halfbond true
+
+# Depois, colorir heteroatomos
+color #2 byhetero target a
+
+# Garantir opacidade
+transparency #2 0 target ab
+
+
+# ============================================================
+# 6. SELECIONAR RESIDUOS DE INTERACAO
+# ============================================================
+
+# Selecionar residuos COMPLETOS do receptor
+# com pelo menos um atomo a 4.5 A do ligante
+
+select zone #2 4.5 (#1 & protein) residues true
+
+
+# ============================================================
+# 7. REPRESENTAR RESIDUOS SELECIONADOS
+# ============================================================
+
+# Ocultar cartoon apenas nos residuos selecionados
+hide sel cartoons
+
+# Mostrar atomos e ligacoes
+show sel atoms
+show sel bonds
+
+# Representacao em sticks
+style sel stick
+
+size sel stickRadius 0.22
+size sel atomRadius 0.30
+
+# Cor provisoria
+color sel #B0B0B0 target ab halfbond true
+
+# Garantir opacidade
+transparency sel 0 target ab
+
+
+# ============================================================
+# 8. COLORACAO POR SUBUNIDADE
+# ============================================================
+
+# beta2 - cadeias A e C
+color (sel & #1/A) beta2_pastel target a
+color (sel & #1/C) beta2_pastel target a
+
+# alpha1 - cadeias B e D
+color (sel & #1/B) alpha1_pastel target a
+color (sel & #1/D) alpha1_pastel target a
+
+# gamma2 - cadeia E
+color (sel & #1/E) gamma2_pastel target a
+
+
+# ============================================================
+# 9. LABELS AUTOMATICOS
+# ============================================================
+
+# Nome e numero do residuo
+# Exemplo: TYR160, SER205, PHE77
+
+label sel residues text "{0.name}{0.number}" color #303030 height 0.5 size 64 onTop true
+
+
+# ============================================================
+# 10. CONTATOS GERAIS
+# ============================================================
+
+# Distancia maxima: 3.8 A
+# Linhas finas, tracejadas e quase transparentes
+# Cor RGBA com aproximadamente 67% de transparencia
+
+contacts #2 restrict sel distanceOnly 3.8 makePseudobonds true reveal false color #98989855 radius 0.055 dashes 8 name GABAA_contacts
+
+
+# ============================================================
+# 11. LIGACOES DE HIDROGENIO
+# ============================================================
+
+# Cinza mais escuro e linhas mais espessas
+
+hbonds #2 restrict sel reveal false color #707070 radius 0.12 dashes 8 name GABAA_hbonds
+
+
+# ============================================================
+# 12. REMOVER DESTAQUE DA SELECAO
+# ============================================================
+
+select clear
+
+
+# ============================================================
+# 13. EXPORTACAO PARA PUBLICACAO
+# ============================================================
+
+# Descomentar quando desejar exportar.
+# Renomear a imagem para cada ligante.
+
+# save "GABAA_ligante_interacoes.png" width 3200 supersample 3 transparentBackground true
+
+
+# ============================================================
+# FIM
+# NENHUMA ALTERACAO DE CAMERA
+# ============================================================
