@@ -1,8 +1,7 @@
 # ============================================================
 # GABAA alpha1-beta2-gamma2
 # INTERACOES - MODO PUBLICACAO
-# FULL + SILHUETA
-# MOSTRAR APENAS RESIDUOS EM CONTATO
+# FULL + SILHUETA + LABELS EM NEGRITO
 # ============================================================
 #
 # #1 = RECEPTOR
@@ -16,17 +15,18 @@
 # CAMERA E COORDENADAS PERMANECEM INALTERADAS
 # ============================================================
 
-
 # ============================================================
 # 1. CONFIGURACAO VISUAL
 # ============================================================
 
 set bgColor white
+
 lighting full
+lighting shadows false
+
 graphics silhouettes true
 graphics silhouettes width 1.2
 graphics silhouettes color black
-
 
 # ============================================================
 # 2. LIMPEZA DA VISUALIZACAO ANTERIOR
@@ -53,7 +53,6 @@ hide #2 cartoons
 hide #2 ribbons
 surface close #2
 
-
 # ============================================================
 # 3. PALETA PADRONIZADA
 # ============================================================
@@ -66,7 +65,6 @@ colordef alpha1_pastel #D8CBEF
 
 # gamma2 - E
 colordef gamma2_pastel #8F7CB8
-
 
 # ============================================================
 # 4. LIGANTE - HETEROATOMOS
@@ -88,7 +86,6 @@ color #2 byhetero target a
 
 transparency #2 0 target ab
 
-
 # ============================================================
 # 5. SELECIONAR RESIDUOS DE INTERACAO
 # ============================================================
@@ -97,7 +94,6 @@ transparency #2 0 target ab
 # ate 4.5 A do ligante
 
 select zone #2 4.5 (#1 & protein) residues true
-
 
 # ============================================================
 # 6. REPRESENTAR SOMENTE OS RESIDUOS SELECIONADOS
@@ -111,10 +107,10 @@ style sel stick
 size sel stickRadius 0.24
 size sel atomRadius 0.32
 
-# cor provisoria
+# Cor provisoria
 color sel #B0B0B0 target ab halfbond true
-transparency sel 0 target ab
 
+transparency sel 0 target ab
 
 # ============================================================
 # 7. COLORACAO DOS RESIDUOS PELAS SUBUNIDADES
@@ -131,13 +127,16 @@ color (sel & #1/D) alpha1_pastel target a
 # gamma2 - cadeia E
 color (sel & #1/E) gamma2_pastel target a
 
-
 # ============================================================
-# 8. LABELS AUTOMATICOS
+# 8. LABELS AUTOMATICOS - NEGRITO + OFFSET
 # ============================================================
 
-label sel residues text "{0.name}{0.number}" color #303030 height 0.45 size 64 onTop true
+# Fonte: Rockwell Extra Bold
+# Altura: 0.75 Angstrom
+# Size: 128 para melhor definicao na exportacao
+# Offset: afasta os labels do residuo
 
+label sel residues text "{0.name}{0.number}" color #252525 height 0.75 size 128 font "Rockwell Extra Bold" offset 0,0,0.8 onTop true
 
 # ============================================================
 # 9. CONTATOS GERAIS
@@ -145,13 +144,13 @@ label sel residues text "{0.name}{0.number}" color #303030 height 0.45 size 64 o
 
 contacts #2 restrict sel distanceOnly 3.8 makePseudobonds true reveal false color #98989855 radius 0.055 dashes 8 name GABAA_contacts
 
-
 # ============================================================
 # 10. LIGACOES DE HIDROGENIO
 # ============================================================
 
-hbonds #2 restrict sel reveal false color #800020 radius 0.12 dashes 8 name GABAA_hbonds
+# Bordo / vermelho escuro
 
+hbonds #2 restrict sel reveal false color #800020 radius 0.12 dashes 8 name GABAA_hbonds
 
 # ============================================================
 # 11. LIMPAR DESTAQUE DA SELECAO
@@ -159,15 +158,12 @@ hbonds #2 restrict sel reveal false color #800020 radius 0.12 dashes 8 name GABA
 
 select clear
 
-
 # ============================================================
 # 12. EXPORTACAO PARA PUBLICACAO
 # ============================================================
 
-# Descomente quando quiser exportar com fundo transparente:
 # save "GABAA_ligante_interacoes.png" width 3200 supersample 3 transparentBackground true
 
-
 # ============================================================
-# FIM
+# FIM - CAMERA PRESERVADA
 # ============================================================
